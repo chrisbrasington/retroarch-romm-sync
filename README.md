@@ -139,24 +139,47 @@ States don't have a slot/autocleanup concept in RomM - each game's state
 upload reuses the same filename, so it just replaces the previous one
 in place rather than accumulating.
 
-## Docker / scheduling
+## Docker
 
-The container runs one sync pass and exits - point cron, a file-watcher, or
-whatever scheduler you're already using at `docker run`:
+The image itself runs one sync pass and exits - it's not a server, and
+doesn't listen on any port.
+
+### Automated, via Docker Compose
+
+`docker-compose.yml` wraps that one-shot image in a loop so the whole thing
+is self-contained - no host cron needed:
+
+```
+docker compose up -d
+```
+
+It syncs, sleeps `SYNC_INTERVAL_SECONDS` (default 86400 = nightly), and
+repeats, restarting automatically via `restart: unless-stopped` if it
+crashes or the host reboots. Note this schedules "N seconds after the
+previous run *finishes*," not an exact wall-clock time - fine for "roughly
+nightly," not for "exactly 3:00am." Adjust the interval in
+`docker-compose.yml`'s `environment:` section, or drop the loop and use the
+one-off form below with real host cron if you need exact timing.
+
+Only mount an SSH key (see the commented-out line in `docker-compose.yml`)
+if you've set `hakchi.key_path` in config.yaml - this device accepts
+unauthenticated root SSH by default (see Prerequisites above), so most
+setups don't need one.
+
+### One-off, via `docker run`
+
+For manual runs or your own host-cron entry instead of the Compose loop:
 
 ```
 docker build -t hakchi-sync .
 docker run --rm \
   --env-file .env \
   -v $PWD/config.yaml:/config/config.yaml:ro \
-  -v ~/.ssh/id_rsa:/root/.ssh/id_rsa:ro \
   hakchi-sync
 ```
 
-Example cron entry (host crontab, runs every night at 3am):
-
 ```
-0 3 * * * docker run --rm --env-file /path/to/.env -v /path/to/config.yaml:/config/config.yaml:ro -v /path/to/id_rsa:/root/.ssh/id_rsa:ro hakchi-sync
+0 3 * * * docker run --rm --env-file /path/to/.env -v /path/to/config.yaml:/config/config.yaml:ro hakchi-sync
 ```
 
 Exit code is `0` on success, `1` if any game failed to upload, `2` on a

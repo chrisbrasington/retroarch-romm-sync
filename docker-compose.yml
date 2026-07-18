@@ -1,0 +1,27 @@
+services:
+  hakchi-sync:
+    build: .
+    # No ports: this is a one-shot CLI tool, not a server - it only makes
+    # outbound connections (SSH to the SNES Mini, HTTPS to RomM).
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Seconds between sync runs. This is "N seconds after the previous
+      # run finishes," not an exact wall-clock schedule - if you need e.g.
+      # exactly 3am every day, use host cron + `docker compose run --rm
+      # hakchi-sync` instead and drop this loop-based entrypoint override.
+      SYNC_INTERVAL_SECONDS: "86400"
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      # Only uncomment if hakchi.key_path is set in config.yaml - this
+      # device's dropbear SSH accepts unauthenticated root by default (see
+      # README's Prerequisites), so most setups don't need this at all.
+      # - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while true; do
+          python -m hakchi_sync --config /config/config.yaml
+          echo "sleeping ${SYNC_INTERVAL_SECONDS}s until next sync"
+          sleep "$SYNC_INTERVAL_SECONDS"
+        done
