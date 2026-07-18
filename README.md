@@ -1,12 +1,22 @@
 # hakchi-sync
 
-Pulls SNES cartridge save files (`cartridge.sram`) off a hakchi2-ce SNES Mini
-over SSH and uploads them to [RomM](https://docs.romm.app/) so they're backed
-up and playable from RomM's browser emulator.
+Pulls save data for hakchi2-ce games off a SNES Mini over SSH and uploads it
+to [RomM](https://docs.romm.app/), so it's backed up and playable from RomM's
+browser emulator. Works across every console hakchi2-ce runs (SNES, NES,
+Game Boy, etc.) - the save-directory convention is the same regardless of
+which core actually emulates the game.
 
-Save states are intentionally out of scope: hakchi's `snes9x2010` core and
-RomM/EmulatorJS's `snes9x`/`bsnes` cores use incompatible internal state
-formats, so a state produced on the device can't be replayed there.
+Each configured game syncs two things independently:
+- **The battery save** (`cartridge.sram`) - the actual in-game save. This is
+  the reliable part; it's core-agnostic and plays back in RomM/EmulatorJS
+  fine (confirmed against a real device).
+- **The latest suspend-point state** - uploaded too, but likely won't load
+  in EmulatorJS for cores where hakchi's version doesn't match RomM's
+  (confirmed: hakchi's SNES core is `snes9x2010`, RomM/EmulatorJS only offer
+  `snes9x`/`bsnes` - different internal state formats). It's uploaded anyway
+  because some games (e.g. original Game Boy carts with no battery save at
+  all) have nothing else to back up, and RomM's Game Boy core might happen
+  to match. A game with neither a save nor a state is skipped, not an error.
 
 ## Setup
 
@@ -14,29 +24,41 @@ formats, so a state produced on the device can't be replayed there.
 2. `cp .env.example .env` and set `ROMM_API_TOKEN` - generate it under RomM's
    Settings > API tokens (a `rmm_...` client token, not your login password).
    `.env` is gitignored; never put the token in config.yaml.
-3. `cp config.example.yaml config.yaml` and fill in:
-   - `romm.base_url`
-   - `hakchi.host` - however you already reach the device (`ssh root@hakchi`
-     working means this will too).
-   - `games` - one entry per game: the `CLV-*` folder name from
-     `ssh root@hakchi ls /var/lib/clover/profiles/0`, and the `rom_id` from
-     that game's RomM URL (`.../rom/<id>`).
-4. Confirm each `rom_id` actually points at the game you think it does:
+3. `cp config.example.yaml config.yaml` and fill in `romm.base_url` and
+   `hakchi.host` (however you already reach the device - if `ssh root@hakchi`
+   works, this will too). Leave `games:` empty; the next step fills it in.
+4. Add game mappings interactively:
+
+   ```
+   python -m hakchi_sync --setup
+   ```
+
+   Walks every hakchi-installed game that has an actual save file on the
+   device (across every console, not just SNES), one at a time. For each,
+   paste a RomM rom URL (`.../rom/93`) or a bare rom ID (`93`) - it looks the
+   rom up in RomM and shows you the real name/platform ("rom 93 is 'Super
+   Mario 64' (Nintendo 64) - use it?") before writing anything, so you
+   confirm the mapping rather than trusting a guess. Blank skips a game,
+   `q` stops early. Add `--all-roms` to also be offered games with no save
+   file yet (e.g. to pre-map something you haven't played yet).
+
+   Games already in `config.yaml` are skipped, so it's safe to re-run
+   `--setup` later as you add more games to the device.
+
+5. Confirm each `rom_id` actually points at the game you think it does
+   (`--setup` already does this per-game, but this re-checks everything):
 
    ```
    python -m hakchi_sync --verify-only
    ```
 
-   This only calls RomM's API (no SSH needed) and prints the RomM name/platform
-   next to each configured mapping - check the printed name before trusting it.
-
-5. Dry run against the real device (reads saves over SSH, does not upload):
+6. Dry run against the real device (reads saves over SSH, does not upload):
 
    ```
    python -m hakchi_sync --dry-run
    ```
 
-6. Run for real:
+7. Run for real:
 
    ```
    python -m hakchi_sync
@@ -46,10 +68,14 @@ Use `--game CLV-U-NRHVN` on any command to limit it to one game while testing.
 
 ## Retention
 
-Uploads go into a dedicated RomM save slot (`slot` in config, default
+Battery saves go into a dedicated RomM save slot (`slot` in config, default
 `auto-sync`) with autocleanup on, keeping the last `autocleanup_limit` saves
 in that slot. RomM also skips uploading when the save is byte-identical to
 what's already in the slot, so an unplayed game doesn't churn out duplicates.
+
+States don't have a slot/autocleanup concept in RomM - each game's state
+upload reuses the same filename, so it just replaces the previous one
+in place rather than accumulating.
 
 ## Docker / scheduling
 

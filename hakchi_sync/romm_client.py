@@ -18,13 +18,13 @@ class RomSummary:
 
 @dataclass(frozen=True)
 class UploadResult:
-    save_id: int
+    asset_id: int
     file_name: str
 
 
 class RomMClient:
     """Thin wrapper around the bits of the RomM API this tool needs:
-    looking up a rom for mapping verification, and uploading a save.
+    looking up a rom for mapping verification, and uploading saves/states.
     """
 
     def __init__(self, base_url: str, api_token: str, timeout: float = 30.0):
@@ -74,7 +74,29 @@ class RomMClient:
         )
         self._raise_for_status(resp, f"uploading save for rom {rom_id}")
         body = resp.json()
-        return UploadResult(save_id=body["id"], file_name=body["file_name"])
+        return UploadResult(asset_id=body["id"], file_name=body["file_name"])
+
+    def upload_state(
+        self,
+        rom_id: int,
+        file_name: str,
+        data: bytes,
+        *,
+        emulator: str | None = None,
+    ) -> UploadResult:
+        params: dict[str, str | int] = {"rom_id": rom_id}
+        if emulator:
+            params["emulator"] = emulator
+
+        resp = self._session.post(
+            f"{self._base_url}/api/states",
+            params=params,
+            files={"stateFile": (file_name, data)},
+            timeout=self._timeout,
+        )
+        self._raise_for_status(resp, f"uploading state for rom {rom_id}")
+        body = resp.json()
+        return UploadResult(asset_id=body["id"], file_name=body["file_name"])
 
     @staticmethod
     def _raise_for_status(resp: requests.Response, action: str) -> None:

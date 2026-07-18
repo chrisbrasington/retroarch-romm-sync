@@ -9,6 +9,7 @@ import paramiko
 from .config import AppConfig, ConfigError, load_config
 from .hakchi_client import HakchiClient
 from .romm_client import RomMApiError, RomMClient
+from .setup_wizard import SetupWizard
 from .sync_service import SaveSyncService, SyncStatus
 
 logger = logging.getLogger("hakchi_sync")
@@ -35,6 +36,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--verify-only",
         action="store_true",
         help="check that each configured rom_id resolves to the expected game in RomM, then exit",
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="interactively add game mappings to config.yaml, then exit",
+    )
+    parser.add_argument(
+        "--all-roms",
+        action="store_true",
+        help="with --setup, also offer games that have no save file on the device yet",
     )
     parser.add_argument(
         "--game",
@@ -72,17 +83,21 @@ def _verify_mappings(config: AppConfig, games) -> bool:
 
 
 def _print_summary(results) -> int:
-    counts = {status: 0 for status in SyncStatus}
+    counts: dict[tuple[str, SyncStatus], int] = {}
     for result in results:
-        counts[result.status] += 1
+        key = (result.kind, result.status)
+        counts[key] = counts.get(key, 0) + 1
 
     print()
     print("Summary:")
-    for status in SyncStatus:
-        if counts[status]:
-            print(f"  {status.value}: {counts[status]}")
+    for kind in ("sram", "state"):
+        for status in SyncStatus:
+            n = counts.get((kind, status), 0)
+            if n:
+                print(f"  {kind} {status.value}: {n}")
 
-    return 1 if counts[SyncStatus.FAILED] else 0
+    any_failed = any(status is SyncStatus.FAILED for _, status in counts)
+    return 1 if any_failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -91,6 +106,26 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = load_config(args.config)
+    except ConfigError as exc:
+        logger.error("config error: %s", exc)
+        return 2
+
+    if args.setup:
+        try:
+            with HakchiClient(
+                host=config.hakchi_host,
+                user=config.hakchi_user,
+                port=config.hakchi_port,
+                key_path=config.hakchi_key_path,
+            ) as hakchi:
+                romm = RomMClient(config.romm_base_url, config.romm_api_token)
+                wizard = SetupWizard(hakchi, romm, args.config)
+                return wizard.run(include_all=args.all_roms)
+        except (OSError, paramiko.SSHException) as exc:
+            logger.error("could not reach hakchi at %s: %s", config.hakchi_host, exc)
+            return 3
+
+    try:
         games = _select_games(config, args.game)
     except ConfigError as exc:
         logger.error("config error: %s", exc)
