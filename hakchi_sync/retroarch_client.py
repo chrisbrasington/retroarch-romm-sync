@@ -114,8 +114,24 @@ class RetroArchSSHClient:
         if not paths:
             return []
         if policy is StateUploadPolicy.LATEST:
-            paths = paths[-1:]
+            paths = [self._pick_latest_state_path(paths, game_id)]
         return [self._read_state_at(path, game_id) for path in paths]
+
+    @staticmethod
+    def _pick_latest_state_path(paths: list[str], game_id: str) -> str:
+        # Many of these handhelds have no battery-backed RTC, so each boot's
+        # file mtimes are relative to whatever arbitrary clock value the
+        # device came up with that session, not real wall-clock time -
+        # comparing mtimes across different play sessions/boots is
+        # unreliable (confirmed live: a manual numbered slot from an older
+        # session had a *later* raw mtime than the auto-save slot from a
+        # more recent one). RetroArch's "auto" save-state slot is written
+        # every time a game is suspended/exited, which in practice is the
+        # most reliable signal for "last played" - prefer it outright over
+        # the mtime-sorted comparison when it exists.
+        auto_name = f"{game_id}.state.auto".lower()
+        auto_path = next((p for p in paths if posixpath.basename(p).lower() == auto_name), None)
+        return auto_path or paths[-1]
 
     # --- internals -----------------------------------------------------------
 
