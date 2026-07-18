@@ -130,6 +130,9 @@ def _verify_mappings(romm: RomMClient, device: DeviceConfig, games: list[GameEnt
     print(f"\n{device.id}:")
     print(f"  {'GAME ID':<24} {'ROM ID':>7}  ROMM NAME (PLATFORM)")
     for game in games:
+        if game.ignored:
+            print(f"  {game.game_id:<24} {'-':>7}  (ignored - not played on this device)")
+            continue
         try:
             rom = romm.get_rom_summary(game.rom_id)
             print(f"  {game.game_id:<24} {game.rom_id:>7}  {rom.name} ({rom.platform_display_name})")

@@ -110,12 +110,34 @@ class RetroArchSSHClient:
         self, game_id: str, path_hint: str | None, policy: StateUploadPolicy
     ) -> list[SaveState]:
         state_dir = self._resolved_dir(self._states_root, path_hint)
+
+        if policy is StateUploadPolicy.LATEST:
+            # _pick_latest_state_path always prefers the auto-save slot when
+            # it exists, regardless of what a directory listing would find -
+            # so skip the listing entirely and just try reading it directly
+            # by its predictable filename. A per-core states directory can
+            # hold state files for every game ever played on it (hundreds,
+            # on a well-used device), and `find`-globbing the whole thing
+            # over a slow SSH link (e.g. Miyoo Mini WiFi) is the single
+            # slowest part of syncing one game. Falls back to a real listing
+            # only if there's no auto-save state yet (e.g. never suspended,
+            # only manual saves).
+            auto_state = self._try_read_state(state_dir, f"{game_id}.state.auto", game_id)
+            if auto_state is not None:
+                return [auto_state]
+
         paths = self._find_state_paths(state_dir, game_id)
         if not paths:
             return []
         if policy is StateUploadPolicy.LATEST:
             paths = [self._pick_latest_state_path(paths, game_id)]
         return [self._read_state_at(path, game_id) for path in paths]
+
+    def _try_read_state(self, state_dir: str, filename: str, game_id: str) -> SaveState | None:
+        try:
+            return self._read_state_at(posixpath.join(state_dir, filename), game_id)
+        except SaveNotFoundError:
+            return None
 
     @staticmethod
     def _pick_latest_state_path(paths: list[str], game_id: str) -> str:

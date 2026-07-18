@@ -24,13 +24,18 @@ class StateUploadPolicy(Enum):
 @dataclass(frozen=True)
 class GameEntry:
     game_id: str
-    rom_id: int
+    # None only when ignored=True - an ignored entry exists purely to mark
+    # "don't offer this again", it's never actually mapped to a RomM rom.
+    rom_id: int | None = None
     display_name: str | None = None
     emulator: str | None = None
     # Extra device-specific location hint (e.g. which saves_root subdirectory
     # this game's files actually live under) - only meaningful for some
     # device types, see DeviceClient.resolve_path_hint().
     path_hint: str | None = None
+    # Set via --setup's 'i' choice: the game exists on this device but isn't
+    # played here, so skip it every sync without --setup re-offering it.
+    ignored: bool = False
 
     @property
     def label(self) -> str:
@@ -150,15 +155,19 @@ def _load_device(d: dict) -> DeviceConfig:
 
     games = []
     for i, g in enumerate(d.get("games", [])):
-        if "game_id" not in g or "rom_id" not in g:
-            raise ConfigError(f"devices[{device_id}].games[{i}] must have game_id and rom_id")
+        if "game_id" not in g:
+            raise ConfigError(f"devices[{device_id}].games[{i}] must have game_id")
+        ignored = bool(g.get("ignored", False))
+        if not ignored and "rom_id" not in g:
+            raise ConfigError(f"devices[{device_id}].games[{i}] must have rom_id (or ignored: true)")
         games.append(
             GameEntry(
                 game_id=g["game_id"],
-                rom_id=int(g["rom_id"]),
+                rom_id=int(g["rom_id"]) if "rom_id" in g else None,
                 display_name=g.get("display_name"),
                 emulator=g.get("emulator"),
                 path_hint=g.get("path_hint"),
+                ignored=ignored,
             )
         )
 

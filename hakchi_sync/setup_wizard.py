@@ -136,11 +136,16 @@ class SetupWizard:
             answer = _ask(
                 input_func,
                 "  pick a number, paste a rom URL/ID, type a new search term,"
+                " 'i' to ignore (exists but not played on this device),"
                 " blank to skip, 'q' to stop: ",
             )
 
             if answer.lower() == "q":
                 raise _StopRequested
+            if answer.lower() in ("i", "ignore"):
+                self._add_ignore(raw, game.id)
+                print(f"  ignored {game.id} - won't be offered again")
+                return 1
             if not answer:
                 print("  skipped")
                 return 0
@@ -177,11 +182,17 @@ class SetupWizard:
             search_term = answer
 
     def _add_mapping(self, raw: dict, game_id: str, rom) -> None:
-        device_node = self._find_device_node(raw)
         entry = {"game_id": game_id, "rom_id": rom.id, "display_name": rom.name}
         path_hint = self._device.resolve_path_hint(game_id)
         if path_hint:
             entry["path_hint"] = path_hint
+        self._write_entry(raw, entry)
+
+    def _add_ignore(self, raw: dict, game_id: str) -> None:
+        self._write_entry(raw, {"game_id": game_id, "ignored": True})
+
+    def _write_entry(self, raw: dict, entry: dict) -> None:
+        device_node = self._find_device_node(raw)
         device_node.setdefault("games", []).append(entry)
         # Written immediately (not batched to the end) so a `q` mid-session,
         # a crash, or Ctrl-C doesn't lose mappings already confirmed.

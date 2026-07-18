@@ -19,6 +19,7 @@ class SyncStatus(Enum):
     UNCHANGED = "unchanged, skipped"
     DRY_RUN = "dry-run"
     SKIPPED_NO_DATA = "skipped (nothing on device)"
+    IGNORED = "ignored"
     FAILED = "failed"
 
 
@@ -26,7 +27,7 @@ class SyncStatus(Enum):
 class SyncResult:
     device_id: str
     game: GameEntry
-    kind: str  # "sram" or "state"
+    kind: str  # "sram", "state", or "game" (a whole-game skip, e.g. ignored)
     status: SyncStatus
     detail: str = ""
 
@@ -55,6 +56,12 @@ class SaveSyncService:
         self._force = force
 
     def sync_game(self, game: GameEntry) -> list[SyncResult]:
+        if game.ignored:
+            device_id = self._device.id
+            logger.info(
+                "[%s/%s] %s: ignored in config, skipping", device_id, game.game_id, game.label
+            )
+            return [SyncResult(device_id, game, "game", SyncStatus.IGNORED)]
         return [self._sync_sram(game), *self._sync_states(game)]
 
     def _sync_sram(self, game: GameEntry) -> SyncResult:

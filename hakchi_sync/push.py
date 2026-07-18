@@ -50,16 +50,19 @@ def _resolve_hakchi_device(config: AppConfig, device_id: str | None) -> DeviceCo
 
 
 def _pick_game(device: DeviceConfig, input_func: Callable[[str], str]) -> GameEntry | None:
+    # Ignored entries have no rom_id - nothing in RomM to pull a save from.
+    games = [g for g in device.games if not g.ignored]
+
     print("Mapped games:")
-    for i, game in enumerate(device.games, start=1):
+    for i, game in enumerate(games, start=1):
         print(f"  {i}) {game.label}  ({game.game_id}, rom {game.rom_id})")
 
     while True:
         answer = input_func("\nPick a number, or 'q' to quit: ").strip()
         if not answer or answer.lower() == "q":
             return None
-        if answer.isdigit() and 1 <= int(answer) <= len(device.games):
-            return device.games[int(answer) - 1]
+        if answer.isdigit() and 1 <= int(answer) <= len(games):
+            return games[int(answer) - 1]
         print("not a valid choice")
 
 

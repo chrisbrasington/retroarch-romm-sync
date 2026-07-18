@@ -131,12 +131,16 @@ host machine's browser).
    If nothing matches (or the wrong things match), type a different search
    term to search again, or paste a rom URL (`.../rom/93`) / bare rom ID
    (`93`) directly - that gets looked up and shown for confirmation before
-   it's saved. Blank skips a game, `q` stops the whole wizard. Add
+   it's saved. Blank skips a game for now (it'll be offered again next
+   `--setup` run); `i` marks it **ignored** instead - for a game that exists
+   on the device but you don't actually play there (e.g. it's synced from
+   another device already), so it's never offered or synced again, and a
+   sync run just logs that it's skipping it. `q` stops the whole wizard. Add
    `--all-roms` to also be offered games with no save file yet (e.g. to
    pre-map something you haven't played yet).
 
-   Games already mapped for that device are skipped, so it's safe to re-run
-   `--setup` later as you add more games.
+   Games already mapped (or ignored) for that device are skipped, so it's
+   safe to re-run `--setup` later as you add more games.
 
 5. Confirm each `rom_id` actually points at the game you think it does
    (`--setup` already does this per-game, but this re-checks everything):
