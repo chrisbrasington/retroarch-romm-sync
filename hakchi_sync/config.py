@@ -63,6 +63,9 @@ class DeviceConfig:
     def find_game(self, game_id: str) -> GameEntry | None:
         return next((g for g in self.games if g.game_id == game_id), None)
 
+    def find_game_by_rom_id(self, rom_id: int) -> GameEntry | None:
+        return next((g for g in self.games if g.rom_id == rom_id), None)
+
 
 @dataclass(frozen=True)
 class AppConfig:

@@ -62,7 +62,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--game",
         metavar="GAME_ID",
-        help="only process this one game (requires --device, since game ids aren't unique across devices)",
+        help="only process this one game, by its game_id in config.yaml "
+        "(requires --device, since game ids aren't unique across devices)",
+    )
+    parser.add_argument(
+        "--rom",
+        metavar="ROM_ID",
+        type=int,
+        help="only process the game mapped to this RomM rom_id (requires --device; "
+        "an alternative to --game when it's easier to remember the rom_id than the "
+        "game_id/filename, e.g. --device miyoo_mini --rom 493)",
     )
     parser.add_argument(
         "--hash-cache",
@@ -91,7 +100,15 @@ def _select_devices(config: AppConfig, only_id: str | None) -> list[DeviceConfig
     return [device]
 
 
-def _select_games(device: DeviceConfig, only_game_id: str | None) -> list[GameEntry]:
+def _select_games(
+    device: DeviceConfig, only_game_id: str | None, only_rom_id: int | None
+) -> list[GameEntry]:
+    if only_rom_id is not None:
+        game = device.find_game_by_rom_id(only_rom_id)
+        if game is None:
+            raise ConfigError(f"no game mapped to rom_id {only_rom_id} on device {device.id!r}")
+        return [game]
+
     if only_game_id is None:
         return device.games
 
@@ -146,8 +163,12 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("config error: %s", exc)
         return 2
 
-    if args.game and not args.device:
-        logger.error("--game requires --device, since game ids aren't unique across devices")
+    if args.game and args.rom:
+        logger.error("--game and --rom are mutually exclusive - pick one")
+        return 2
+
+    if (args.game or args.rom) and not args.device:
+        logger.error("--game/--rom require --device, since they aren't unique across devices")
         return 2
 
     try:
@@ -174,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        games_by_device = {d.id: _select_games(d, args.game) for d in devices}
+        games_by_device = {d.id: _select_games(d, args.game, args.rom) for d in devices}
     except ConfigError as exc:
         logger.error("config error: %s", exc)
         return 2
