@@ -5,6 +5,8 @@ import struct
 import zlib
 
 _RZIP_MAGIC = b"#RZIPv\x01#"
+_RZIP_CHUNK_SIZE = 131072  # RetroArch's RZIP_DEFAULT_CHUNK_SIZE
+_RZIP_COMPRESSION_LEVEL = 6  # RetroArch's RZIP_COMPRESSION_LEVEL
 
 
 class StateDecodeError(Exception):
@@ -25,6 +27,21 @@ def decode_savestate(raw: bytes) -> bytes:
     if data[:8] == _RZIP_MAGIC:
         data = _rzip_decompress(data)
     return data
+
+
+def encode_savestate(raw: bytes) -> bytes:
+    """The inverse of decode_savestate: wraps a raw RASTATE payload back into
+    the gzip(RZIP(...)) form hakchi2-ce expects to find on disk, so a state
+    pulled from RomM can be written back to the device and resumed.
+    """
+    header = _RZIP_MAGIC + struct.pack("<IQ", _RZIP_CHUNK_SIZE, len(raw))
+    body = bytearray()
+    for offset in range(0, len(raw), _RZIP_CHUNK_SIZE):
+        chunk = raw[offset : offset + _RZIP_CHUNK_SIZE]
+        compressed = zlib.compress(chunk, _RZIP_COMPRESSION_LEVEL)
+        body += struct.pack("<I", len(compressed))
+        body += compressed
+    return gzip.compress(header + bytes(body))
 
 
 def _rzip_decompress(data: bytes) -> bytes:

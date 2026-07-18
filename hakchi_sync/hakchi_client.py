@@ -114,15 +114,8 @@ class HakchiClient:
         (still gzip/RZIP-wrapped as stored on disk) plus its thumbnail
         screenshot if one exists, or None if it has never been suspended.
         """
-        game_dir = posixpath.join(self.SAVE_ROOT, hakchi_code)
-        command = (
-            f"find {shlex.quote(game_dir)} -name savestate 2>/dev/null "
-            "| while read -r f; do stat -c '%Y %n' \"$f\"; done "
-            "| sort -n | tail -1 | cut -d' ' -f2-"
-        )
-        out, _, _ = self._exec(command)
-        path = out.decode(errors="replace").strip()
-        if not path:
+        path = self._find_latest_savestate_path(hakchi_code)
+        if path is None:
             return None
 
         # path is .../suspendpointN/rollback/savestate - its screenshot is
@@ -135,6 +128,59 @@ class HakchiClient:
             screenshot = None
 
         return SaveState(data=self._read_file(path), screenshot=screenshot)
+
+    def write_cartridge_sram(self, hakchi_code: str, data: bytes) -> None:
+        """Overwrites a game's battery save on the device."""
+        path = posixpath.join(self.SAVE_ROOT, hakchi_code, "cartridge.sram")
+        self.write_file(path, data)
+
+    def write_savestate(self, hakchi_code: str, data: bytes) -> str:
+        """Overwrites the current suspend point's state for a game (creating
+        one at suspendpoint1 if the game has never been suspended before).
+        `data` must already be gzip/RZIP-wrapped (see state_codec.encode_savestate).
+        Returns the suspend-point directory written to.
+        """
+        existing = self._find_latest_savestate_path(hakchi_code)
+        if existing is not None:
+            suspendpoint_dir = posixpath.dirname(posixpath.dirname(existing))
+        else:
+            suspendpoint_dir = posixpath.join(self.SAVE_ROOT, hakchi_code, "suspendpoint1")
+
+        rollback_dir = posixpath.join(suspendpoint_dir, "rollback")
+        _, err, exit_status = self._exec(f"mkdir -p -- {shlex.quote(rollback_dir)}")
+        if exit_status != 0:
+            raise HakchiError(f"failed to create {rollback_dir}: {err.decode(errors='replace').strip()}")
+
+        self.write_file(posixpath.join(rollback_dir, "savestate"), data)
+        return suspendpoint_dir
+
+    def write_file(self, remote_path: str, data: bytes) -> None:
+        if self._transport is None:
+            raise HakchiError("not connected - call connect() first")
+
+        channel = self._transport.open_session(timeout=30)
+        try:
+            channel.exec_command(f"cat > {shlex.quote(remote_path)}")
+            channel.sendall(data)
+            channel.shutdown_write()
+            err = channel.makefile_stderr("rb").read()
+            exit_status = channel.recv_exit_status()
+        finally:
+            channel.close()
+
+        if exit_status != 0:
+            raise HakchiError(f"failed to write {remote_path}: {err.decode(errors='replace').strip()}")
+
+    def _find_latest_savestate_path(self, hakchi_code: str) -> str | None:
+        game_dir = posixpath.join(self.SAVE_ROOT, hakchi_code)
+        command = (
+            f"find {shlex.quote(game_dir)} -name savestate 2>/dev/null "
+            "| while read -r f; do stat -c '%Y %n' \"$f\"; done "
+            "| sort -n | tail -1 | cut -d' ' -f2-"
+        )
+        out, _, _ = self._exec(command)
+        path = out.decode(errors="replace").strip()
+        return path or None
 
     def list_installed_games(self) -> list[InstalledGame]:
         """Every game hakchi2-ce has installed, across every console it

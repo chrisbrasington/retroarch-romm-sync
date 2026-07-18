@@ -22,6 +22,14 @@ class UploadResult:
     file_name: str
 
 
+@dataclass(frozen=True)
+class AssetSummary:
+    id: int
+    file_name: str
+    slot: str | None
+    updated_at: str
+
+
 class RomMClient:
     """Thin wrapper around the bits of the RomM API this tool needs:
     looking up a rom for mapping verification, and uploading saves/states.
@@ -119,6 +127,40 @@ class RomMClient:
         self._raise_for_status(resp, f"uploading state for rom {rom_id}")
         body = resp.json()
         return UploadResult(asset_id=body["id"], file_name=body["file_name"])
+
+    def list_saves(self, rom_id: int) -> list[AssetSummary]:
+        resp = self._session.get(
+            f"{self._base_url}/api/saves", params={"rom_id": rom_id}, timeout=self._timeout
+        )
+        self._raise_for_status(resp, f"listing saves for rom {rom_id}")
+        return [self._asset_summary_from_json(item) for item in resp.json()]
+
+    def list_states(self, rom_id: int) -> list[AssetSummary]:
+        resp = self._session.get(
+            f"{self._base_url}/api/states", params={"rom_id": rom_id}, timeout=self._timeout
+        )
+        self._raise_for_status(resp, f"listing states for rom {rom_id}")
+        return [self._asset_summary_from_json(item) for item in resp.json()]
+
+    def download_save(self, save_id: int) -> bytes:
+        return self._download(f"/api/saves/{save_id}/content", f"save {save_id}")
+
+    def download_state(self, state_id: int) -> bytes:
+        return self._download(f"/api/states/{state_id}/content", f"state {state_id}")
+
+    def _download(self, path: str, description: str) -> bytes:
+        resp = self._session.get(f"{self._base_url}{path}", timeout=self._timeout)
+        self._raise_for_status(resp, f"downloading {description}")
+        return resp.content
+
+    @staticmethod
+    def _asset_summary_from_json(data: dict) -> AssetSummary:
+        return AssetSummary(
+            id=data["id"],
+            file_name=data["file_name"],
+            slot=data.get("slot"),
+            updated_at=data["updated_at"],
+        )
 
     @staticmethod
     def _raise_for_status(resp: requests.Response, action: str) -> None:
