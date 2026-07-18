@@ -77,6 +77,26 @@ Each configured game syncs two things independently:
 
 Use `--game CLV-U-NRHVN` on any command to limit it to one game while testing.
 
+## Pushing a save/state back to the device
+
+The sync direction above is one-way (device -> RomM). To go the other way -
+push whatever's in RomM back down to the SNES Mini, e.g. to restore an older
+save or move progress between devices - use the interactive push tool
+instead:
+
+```
+python -m hakchi_sync.push
+```
+
+It lists your mapped games, and for whichever one you pick, lets you push
+its save, its state, or both. Each one shows you exactly what it's about to
+overwrite (RomM's filename and timestamp) and requires a `y` confirmation
+before touching the device - **this permanently overwrites whatever's
+currently on the SNES Mini for that game**, so make sure you're pushing the
+right thing. Picks the most recently updated save/state in RomM if there's
+more than one. Loops back to the game list after each push so you can do
+several in one session; blank/`q` at the game picker exits.
+
 ## Retention
 
 Battery saves go into a dedicated RomM save slot (`slot` in config, default
