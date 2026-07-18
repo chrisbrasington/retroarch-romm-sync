@@ -90,17 +90,17 @@ class SaveSyncService:
         tag = f"[{game.hakchi_code}] {game.label} (state)"
 
         try:
-            raw = self._hakchi.read_latest_savestate(game.hakchi_code)
+            savestate = self._hakchi.read_latest_savestate(game.hakchi_code)
         except HakchiError as exc:
             logger.error("%s: failed to read from device: %s", tag, exc)
             return SyncResult(game, "state", SyncStatus.FAILED, str(exc))
 
-        if raw is None:
+        if savestate is None:
             logger.info("%s: no suspend-point state on device, skipping", tag)
             return SyncResult(game, "state", SyncStatus.SKIPPED_NO_DATA)
 
         try:
-            data = decode_savestate(raw)
+            data = decode_savestate(savestate.data)
         except StateDecodeError as exc:
             logger.error("%s: could not decode state: %s", tag, exc)
             return SyncResult(game, "state", SyncStatus.FAILED, str(exc))
@@ -109,8 +109,8 @@ class SaveSyncService:
 
         if self._dry_run:
             logger.info(
-                "%s: DRY RUN - would upload %s (%d bytes) to rom_id=%d",
-                tag, file_name, len(data), game.rom_id,
+                "%s: DRY RUN - would upload %s (%d bytes, screenshot=%s) to rom_id=%d",
+                tag, file_name, len(data), bool(savestate.screenshot), game.rom_id,
             )
             return SyncResult(game, "state", SyncStatus.DRY_RUN, f"{len(data)} bytes")
 
@@ -120,6 +120,7 @@ class SaveSyncService:
                 file_name=file_name,
                 data=data,
                 emulator=game.emulator,
+                screenshot=savestate.screenshot,
             )
         except RomMApiError as exc:
             logger.error("%s: upload failed: %s", tag, exc)

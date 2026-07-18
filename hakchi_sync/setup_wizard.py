@@ -50,11 +50,13 @@ class SetupWizard:
         existing_codes = {g["hakchi_code"] for g in raw.get("games", [])}
         installed = self._hakchi.list_installed_games()
         with_saves = self._hakchi.list_codes_with_cartridge_sram()
+        with_states = self._hakchi.list_codes_with_savestate()
+        has_data = with_saves | with_states
 
         candidates = [
             game
             for game in installed
-            if game.code not in existing_codes and (include_all or game.code in with_saves)
+            if game.code not in existing_codes and (include_all or game.code in has_data)
         ]
 
         if not candidates:
@@ -66,7 +68,7 @@ class SetupWizard:
         added = 0
         for game in candidates:
             try:
-                added += self._prompt_one(game, with_saves, raw, input_func)
+                added += self._prompt_one(game, with_saves, with_states, raw, input_func)
             except _StopRequested:
                 break
 
@@ -82,11 +84,17 @@ class SetupWizard:
         self,
         game: InstalledGame,
         with_saves: set[str],
+        with_states: set[str],
         raw: dict,
         input_func: Callable[[str], str],
     ) -> int:
-        save_note = "" if game.code in with_saves else "  [no save file on device]"
-        print(f"\n{game.name}  ({game.code}){save_note}")
+        if game.code in with_saves:
+            note = ""
+        elif game.code in with_states:
+            note = "  [no cartridge save - suspend-point state only]"
+        else:
+            note = "  [no save or state on device]"
+        print(f"\n{game.name}  ({game.code}){note}")
 
         search_term = game.name
         while True:

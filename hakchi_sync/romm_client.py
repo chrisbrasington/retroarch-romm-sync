@@ -100,15 +100,20 @@ class RomMClient:
         data: bytes,
         *,
         emulator: str | None = None,
+        screenshot: bytes | None = None,
     ) -> UploadResult:
         params: dict[str, str | int] = {"rom_id": rom_id}
         if emulator:
             params["emulator"] = emulator
 
+        files = {"stateFile": (file_name, data)}
+        if screenshot:
+            files["screenshotFile"] = (f"{file_name}.png", screenshot)
+
         resp = self._session.post(
             f"{self._base_url}/api/states",
             params=params,
-            files={"stateFile": (file_name, data)},
+            files=files,
             timeout=self._timeout,
         )
         self._raise_for_status(resp, f"uploading state for rom {rom_id}")

@@ -24,6 +24,12 @@ class InstalledGame:
     exec_line: str
 
 
+@dataclass(frozen=True)
+class SaveState:
+    data: bytes  # still gzip/RZIP-wrapped, as stored on disk
+    screenshot: bytes | None
+
+
 def _load_private_key(path: str) -> paramiko.PKey:
     last_exc: Exception | None = None
     for key_class in _KEY_CLASSES:
@@ -103,10 +109,10 @@ class HakchiClient:
         path = posixpath.join(self.SAVE_ROOT, hakchi_code, "cartridge.sram")
         return self._read_file(path)
 
-    def read_latest_savestate(self, hakchi_code: str) -> bytes | None:
-        """Returns the most recently written suspend-point state for a game,
-        still gzip/RZIP-wrapped as stored on disk, or None if it has never
-        been suspended.
+    def read_latest_savestate(self, hakchi_code: str) -> SaveState | None:
+        """Returns the most recently written suspend-point state for a game
+        (still gzip/RZIP-wrapped as stored on disk) plus its thumbnail
+        screenshot if one exists, or None if it has never been suspended.
         """
         game_dir = posixpath.join(self.SAVE_ROOT, hakchi_code)
         command = (
@@ -118,7 +124,17 @@ class HakchiClient:
         path = out.decode(errors="replace").strip()
         if not path:
             return None
-        return self._read_file(path)
+
+        # path is .../suspendpointN/rollback/savestate - its screenshot is
+        # the sibling .../suspendpointN/state.png.
+        suspendpoint_dir = posixpath.dirname(posixpath.dirname(path))
+        screenshot_path = posixpath.join(suspendpoint_dir, "state.png")
+        try:
+            screenshot = self._read_file(screenshot_path)
+        except SaveNotFoundError:
+            screenshot = None
+
+        return SaveState(data=self._read_file(path), screenshot=screenshot)
 
     def list_installed_games(self) -> list[InstalledGame]:
         """Every game hakchi2-ce has installed, across every console it
@@ -145,6 +161,18 @@ class HakchiClient:
         command = (
             f"for d in {self.SAVE_ROOT}/*/; do "
             "[ -f \"$d/cartridge.sram\" ] && basename \"$d\"; done"
+        )
+        out, _, _ = self._exec(command)
+        return {line.strip() for line in out.decode(errors="replace").splitlines() if line.strip()}
+
+    def list_codes_with_savestate(self) -> set[str]:
+        """hakchi_codes that have at least one suspend-point state on the
+        device, even if they have no cartridge.sram (e.g. games with no
+        battery save at all, like many original Game Boy carts).
+        """
+        command = (
+            f"for d in {self.SAVE_ROOT}/*/; do "
+            'find "$d" -name savestate 2>/dev/null | grep -q . && basename "$d"; done'
         )
         out, _, _ = self._exec(command)
         return {line.strip() for line in out.decode(errors="replace").splitlines() if line.strip()}
