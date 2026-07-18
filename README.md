@@ -18,6 +18,37 @@ Each configured game syncs two things independently:
   all) have nothing else to back up, and RomM's Game Boy core might happen
   to match. A game with neither a save nor a state is skipped, not an error.
 
+## Prerequisites
+
+This tool only talks over SSH to a console already set up with
+[hakchi2-ce](https://github.com/TeamShinkansen/hakchi2-CE) - it doesn't do
+any of that setup itself. Before any of the below will work:
+
+1. The NES/SNES Mini has already been flashed/modded with hakchi2-ce (on
+   Linux this is typically run via `mono`, e.g. from a `~/hakchi2-ce`
+   install directory) and has your games installed on it.
+2. The console is plugged into this machine over USB. Once modded,
+   hakchi2-ce's firmware exposes the console as a USB network device with
+   SSH (dropbear) listening as `root`, no password required, over that
+   USB link - independent of whether the hakchi2-ce GUI/tool itself is
+   running. Unplugging the console removes that network interface, so it
+   has to be plugged in every time you run a sync.
+3. `ssh root@hakchi` (or whatever hostname/IP you use) works on its own,
+   with no extra flags. If `hakchi` doesn't resolve, the console's USB
+   interface usually shows up as a link-local address (`169.254.x.x`) -
+   check `ip addr` / `dmesg` after plugging in, and add it to `/etc/hosts`
+   as `hakchi` (or just use the IP directly as `hakchi.host` in config.yaml).
+
+None of that is specific to this tool - it's the same connection hakchi2-ce
+itself uses, and the same thing a plain `ssh root@hakchi` relies on.
+
+You also need a [RomM](https://docs.romm.app/) instance already installed,
+running, and reachable on the network from wherever this tool runs (it's
+not something this tool sets up or manages) - that's the `romm.base_url`
+in config.yaml. If you're running the container in Docker, make sure
+that's a network path the container can actually reach (not just your
+host machine's browser).
+
 ## Setup
 
 1. `pip install -r requirements.txt`
