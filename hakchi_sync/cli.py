@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 import paramiko
 
 from .config import AppConfig, ConfigError, load_config
 from .hakchi_client import HakchiClient
+from .hash_cache import HashCache
 from .romm_client import RomMApiError, RomMClient
 from .setup_wizard import SetupWizard
 from .sync_service import SaveSyncService, SyncStatus
@@ -51,6 +53,19 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--game",
         metavar="HAKCHI_CODE",
         help="only process this one game (e.g. CLV-U-NRHVN), for testing a single mapping",
+    )
+    parser.add_argument(
+        "--hash-cache",
+        help=(
+            "path to the local file tracking last-uploaded save/state hashes, so "
+            "unchanged ones are skipped without re-uploading (default: alongside "
+            "--config, named .hakchi_sync_cache.json)"
+        ),
+    )
+    parser.add_argument(
+        "--no-hash-cache",
+        action="store_true",
+        help="disable unchanged-skip detection and always upload",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     return parser.parse_args(argv)
@@ -135,6 +150,11 @@ def main(argv: list[str] | None = None) -> int:
         ok = _verify_mappings(config, games)
         return 0 if ok else 1
 
+    hash_cache = None
+    if not args.no_hash_cache:
+        cache_path = args.hash_cache or (Path(args.config).parent / ".hakchi_sync_cache.json")
+        hash_cache = HashCache(cache_path)
+
     try:
         with HakchiClient(
             host=config.hakchi_host,
@@ -143,11 +163,14 @@ def main(argv: list[str] | None = None) -> int:
             key_path=config.hakchi_key_path,
         ) as hakchi:
             romm = RomMClient(config.romm_base_url, config.romm_api_token)
-            service = SaveSyncService(hakchi, romm, config, dry_run=args.dry_run)
+            service = SaveSyncService(hakchi, romm, config, dry_run=args.dry_run, hash_cache=hash_cache)
             results = service.run(games)
     except (OSError, paramiko.SSHException) as exc:
         logger.error("could not reach hakchi at %s: %s", config.hakchi_host, exc)
         return 3
+
+    if hash_cache and not args.dry_run:
+        hash_cache.save()
 
     return _print_summary(results)
 

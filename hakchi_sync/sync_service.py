@@ -6,6 +6,7 @@ from enum import Enum
 
 from .config import AppConfig, GameEntry
 from .hakchi_client import HakchiClient, HakchiError, SaveNotFoundError
+from .hash_cache import HashCache
 from .romm_client import RomMApiError, RomMClient
 from .state_codec import StateDecodeError, decode_savestate
 
@@ -14,6 +15,7 @@ logger = logging.getLogger("hakchi_sync")
 
 class SyncStatus(Enum):
     UPLOADED = "uploaded"
+    UNCHANGED = "unchanged, skipped"
     DRY_RUN = "dry-run"
     SKIPPED_NO_DATA = "skipped (nothing on device)"
     FAILED = "failed"
@@ -39,11 +41,13 @@ class SaveSyncService:
         romm_client: RomMClient,
         config: AppConfig,
         dry_run: bool = False,
+        hash_cache: HashCache | None = None,
     ):
         self._hakchi = hakchi_client
         self._romm = romm_client
         self._config = config
         self._dry_run = dry_run
+        self._hash_cache = hash_cache
 
     def sync_game(self, game: GameEntry) -> list[SyncResult]:
         return [self._sync_sram(game), self._sync_state(game)]
@@ -59,6 +63,10 @@ class SaveSyncService:
         except HakchiError as exc:
             logger.error("%s: failed to read from device: %s", tag, exc)
             return SyncResult(game, "sram", SyncStatus.FAILED, str(exc))
+
+        if self._hash_cache and self._hash_cache.unchanged(game.hakchi_code, "sram", data):
+            logger.info("%s: unchanged since last sync, skipping", tag)
+            return SyncResult(game, "sram", SyncStatus.UNCHANGED)
 
         file_name = f"{game.hakchi_code}.sram"
 
@@ -83,6 +91,9 @@ class SaveSyncService:
             logger.error("%s: upload failed: %s", tag, exc)
             return SyncResult(game, "sram", SyncStatus.FAILED, str(exc))
 
+        if self._hash_cache:
+            self._hash_cache.record(game.hakchi_code, "sram", data)
+
         logger.info("%s: uploaded %s (%d bytes) -> asset id %d", tag, result.file_name, len(data), result.asset_id)
         return SyncResult(game, "sram", SyncStatus.UPLOADED, f"asset id {result.asset_id}")
 
@@ -105,6 +116,10 @@ class SaveSyncService:
             logger.error("%s: could not decode state: %s", tag, exc)
             return SyncResult(game, "state", SyncStatus.FAILED, str(exc))
 
+        if self._hash_cache and self._hash_cache.unchanged(game.hakchi_code, "state", data):
+            logger.info("%s: unchanged since last sync, skipping", tag)
+            return SyncResult(game, "state", SyncStatus.UNCHANGED)
+
         file_name = f"{game.hakchi_code}.state"
 
         if self._dry_run:
@@ -125,6 +140,9 @@ class SaveSyncService:
         except RomMApiError as exc:
             logger.error("%s: upload failed: %s", tag, exc)
             return SyncResult(game, "state", SyncStatus.FAILED, str(exc))
+
+        if self._hash_cache:
+            self._hash_cache.record(game.hakchi_code, "state", data)
 
         logger.info("%s: uploaded %s (%d bytes) -> asset id %d", tag, result.file_name, len(data), result.asset_id)
         return SyncResult(game, "state", SyncStatus.UPLOADED, f"asset id {result.asset_id}")
