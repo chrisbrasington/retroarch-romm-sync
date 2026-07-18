@@ -38,7 +38,24 @@ class RomMClient:
             f"{self._base_url}/api/roms/{rom_id}/simple", timeout=self._timeout
         )
         self._raise_for_status(resp, f"fetching rom {rom_id}")
-        data = resp.json()
+        return self._rom_summary_from_json(resp.json())
+
+    def search_roms(self, search_term: str, limit: int = 5) -> list[RomSummary]:
+        params = {
+            "search_term": search_term,
+            "limit": limit,
+            "with_char_index": "false",
+            "with_filter_values": "false",
+            "with_rom_id_index": "false",
+        }
+        resp = self._session.get(
+            f"{self._base_url}/api/roms", params=params, timeout=self._timeout
+        )
+        self._raise_for_status(resp, f"searching roms for {search_term!r}")
+        return [self._rom_summary_from_json(item) for item in resp.json().get("items", [])]
+
+    @staticmethod
+    def _rom_summary_from_json(data: dict) -> RomSummary:
         return RomSummary(
             id=data["id"],
             name=data.get("name") or data["fs_name"],

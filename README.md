@@ -34,13 +34,24 @@ Each configured game syncs two things independently:
    ```
 
    Walks every hakchi-installed game that has an actual save file on the
-   device (across every console, not just SNES), one at a time. For each,
-   paste a RomM rom URL (`.../rom/93`) or a bare rom ID (`93`) - it looks the
-   rom up in RomM and shows you the real name/platform ("rom 93 is 'Super
-   Mario 64' (Nintendo 64) - use it?") before writing anything, so you
-   confirm the mapping rather than trusting a guess. Blank skips a game,
-   `q` stops early. Add `--all-roms` to also be offered games with no save
-   file yet (e.g. to pre-map something you haven't played yet).
+   device (across every console, not just SNES), one at a time. For each, it
+   searches RomM by the hakchi game's own title and shows candidate matches
+   to pick by number:
+
+   ```
+   Zelda II - The Adventure of Link  (CLV-H-RPCQP)
+     RomM matches for 'Zelda II - The Adventure of Link':
+       1) Zelda II: The Adventure of Link (Nintendo Entertainment System) [rom 12]
+     pick a number, paste a rom URL/ID, type a new search term, blank to skip, 'q' to stop: 1
+     added CLV-H-RPCQP -> rom 12 (Zelda II: The Adventure of Link)
+   ```
+
+   If nothing matches (or the wrong things match), type a different search
+   term to search again, or paste a rom URL (`.../rom/93`) / bare rom ID
+   (`93`) directly - that gets looked up and shown for confirmation before
+   it's saved. Blank skips a game, `q` stops the whole wizard. Add
+   `--all-roms` to also be offered games with no save file yet (e.g. to
+   pre-map something you haven't played yet).
 
    Games already in `config.yaml` are skipped, so it's safe to re-run
    `--setup` later as you add more games to the device.

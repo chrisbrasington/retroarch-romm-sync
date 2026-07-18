@@ -29,9 +29,11 @@ class SetupWizard:
     """Interactively fills in config.yaml's `games:` list.
 
     For each game hakchi2-ce has installed (optionally limited to ones with
-    an actual save on the device) it asks for a RomM rom_id or rom URL,
-    looks the rom up in RomM so you can confirm the mapping by name before
-    it's saved, and appends it to config.yaml.
+    an actual save on the device), it searches RomM by the hakchi game's own
+    name and shows candidate matches to pick from - or you can paste a rom
+    URL/ID directly, which gets looked up and shown for confirmation before
+    it's saved. Either way you see RomM's own name/platform before anything
+    is written to config.yaml.
     """
 
     def __init__(self, hakchi: HakchiClient, romm: RomMClient, config_path: str):
@@ -59,8 +61,7 @@ class SetupWizard:
             print("Nothing to add - every eligible game is already in config.yaml.")
             return 0
 
-        print(f"{len(candidates)} game(s) to map. For each: paste a RomM rom URL or bare rom ID,")
-        print("leave blank to skip, or type 'q' to stop.\n")
+        print(f"{len(candidates)} game(s) to map.\n")
 
         added = 0
         for game in candidates:
@@ -69,12 +70,11 @@ class SetupWizard:
             except _StopRequested:
                 break
 
-        if added:
-            with open(self._config_path, "w") as f:
-                self._yaml.dump(raw, f)
-            print(f"\nSaved {added} new mapping(s) to {self._config_path}")
-        else:
-            print("\nNo mappings added.")
+        print(
+            f"\nSaved {added} new mapping(s) to {self._config_path}"
+            if added
+            else "\nNo mappings added."
+        )
 
         return 0
 
@@ -86,35 +86,69 @@ class SetupWizard:
         input_func: Callable[[str], str],
     ) -> int:
         save_note = "" if game.code in with_saves else "  [no save file on device]"
-        print(f"{game.name}  ({game.code}){save_note}")
+        print(f"\n{game.name}  ({game.code}){save_note}")
 
-        answer = input_func("  RomM URL or rom ID: ").strip()
-        if answer.lower() == "q":
-            raise _StopRequested
-        if not answer:
-            print("  skipped\n")
-            return 0
+        search_term = game.name
+        while True:
+            try:
+                matches = self._romm.search_roms(search_term)
+            except RomMApiError as exc:
+                print(f"  search failed: {exc}")
+                matches = []
 
-        rom_id = parse_rom_id(answer)
-        if rom_id is None:
-            print(f"  could not parse a rom ID out of {answer!r}, skipped\n")
-            return 0
+            if matches:
+                print(f"  RomM matches for {search_term!r}:")
+                for i, rom in enumerate(matches, start=1):
+                    print(f"    {i}) {rom.name} ({rom.platform_display_name}) [rom {rom.id}]")
+            else:
+                print(f"  no RomM matches for {search_term!r}")
 
-        try:
-            rom = self._romm.get_rom_summary(rom_id)
-        except RomMApiError as exc:
-            print(f"  could not look up rom {rom_id}: {exc}\n")
-            return 0
+            answer = input_func(
+                "  pick a number, paste a rom URL/ID, type a new search term,"
+                " blank to skip, 'q' to stop: "
+            ).strip()
 
-        confirm = input_func(
-            f'  RomM says rom {rom_id} is "{rom.name}" ({rom.platform_display_name}) - use it? [Y/n] '
-        ).strip().lower()
-        if confirm not in ("", "y", "yes"):
-            print("  skipped\n")
-            return 0
+            if answer.lower() == "q":
+                raise _StopRequested
+            if not answer:
+                print("  skipped")
+                return 0
 
+            if answer.isdigit() and 1 <= int(answer) <= len(matches):
+                rom = matches[int(answer) - 1]
+                self._add_mapping(raw, game.code, rom)
+                print(f"  added {game.code} -> rom {rom.id} ({rom.name})")
+                return 1
+
+            rom_id = parse_rom_id(answer)
+            if rom_id is not None:
+                try:
+                    rom = self._romm.get_rom_summary(rom_id)
+                except RomMApiError as exc:
+                    print(f"  could not look up rom {rom_id}: {exc}")
+                    continue
+
+                confirm = input_func(
+                    f'  RomM says rom {rom_id} is "{rom.name}" ({rom.platform_display_name})'
+                    " - use it? [Y/n] "
+                ).strip().lower()
+                if confirm in ("", "y", "yes"):
+                    self._add_mapping(raw, game.code, rom)
+                    print(f"  added {game.code} -> rom {rom_id}")
+                    return 1
+                if confirm == "q":
+                    raise _StopRequested
+                print("  not using that one")
+                continue
+
+            # anything else typed is treated as a new search term
+            search_term = answer
+
+    def _add_mapping(self, raw: dict, hakchi_code: str, rom) -> None:
         raw.setdefault("games", []).append(
-            {"hakchi_code": game.code, "rom_id": rom_id, "display_name": rom.name}
+            {"hakchi_code": hakchi_code, "rom_id": rom.id, "display_name": rom.name}
         )
-        print(f"  added {game.code} -> rom {rom_id}\n")
-        return 1
+        # Written immediately (not batched to the end) so a `q` mid-session,
+        # a crash, or Ctrl-C doesn't lose mappings already confirmed.
+        with open(self._config_path, "w") as f:
+            self._yaml.dump(raw, f)
