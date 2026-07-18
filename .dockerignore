@@ -1,0 +1,7 @@
+config.yaml
+.env
+saves/
+scripts/
+__pycache__/
+*.pyc
+.git/

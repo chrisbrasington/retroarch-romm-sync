@@ -1,0 +1,38 @@
+# Copy this to config.yaml and fill in your own values. This file holds no
+# secrets - the RomM API token lives in .env (see .env.example) instead.
+
+romm:
+  base_url: https://romm.example.com
+
+hakchi:
+  host: hakchi
+  user: root
+  port: 22
+  # hakchi2-ce's dropbear SSH server accepts unauthenticated root logins on
+  # its local link by default, so no key is needed - this is the same thing
+  # a plain `ssh root@hakchi` falls back to when no key matches. Only set
+  # key_path if you've hardened the device with real key-based auth.
+  key_path:
+
+# RomM save slot these uploads go into. Keeping automated syncs in their own
+# slot (separate from saves you upload by hand) is what makes autocleanup and
+# the "not too many files" retention below safe.
+slot: auto-sync
+
+# How many saves RomM keeps per game in the slot above before deleting the
+# oldest. RomM also skips uploading unchanged saves within a slot, so this
+# only grows when the save actually changes.
+autocleanup_limit: 3
+
+# One entry per game to sync. hakchi_code is the CLV-* folder name on the
+# device (find it with `ssh root@hakchi ls /var/lib/clover/profiles/0`);
+# rom_id is the numeric ID from the game's RomM URL (.../rom/<id>).
+# Run with --verify-only to confirm each rom_id actually points at the
+# game you think it does before syncing for real.
+games:
+  - hakchi_code: CLV-U-NRHVN
+    rom_id: 369
+    display_name: "The Legend of Zelda - A Link to the Past"
+    # emulator is optional metadata RomM stores alongside the save; omit
+    # if you don't care to record it.
+    emulator: snes9x2010
