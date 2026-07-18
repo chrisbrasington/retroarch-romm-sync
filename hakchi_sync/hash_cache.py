@@ -7,8 +7,9 @@ from pathlib import Path
 
 class HashCache:
     """Tracks the content hash of the last successfully uploaded save/state
-    per (hakchi_code, kind), so an unchanged one can be skipped without
-    re-uploading it. Purely local bookkeeping - RomM exposes a content hash
+    per (device_id, game_id, kind[, slot_label]), so an unchanged one can be
+    skipped without re-uploading it. Purely local bookkeeping - RomM exposes
+    a content hash
     for saves but not for states, so this covers both the same way instead
     of relying on the API (which would mean downloading the state to hash
     it, exactly what this is meant to avoid).
@@ -24,19 +25,24 @@ class HashCache:
         with self._path.open() as f:
             return json.load(f)
 
-    def unchanged(self, hakchi_code: str, kind: str, data: bytes) -> bool:
-        return self._hashes.get(self._key(hakchi_code, kind)) == self._hash(data)
+    def unchanged(
+        self, device_id: str, game_id: str, kind: str, data: bytes, slot_label: str | None = None
+    ) -> bool:
+        return self._hashes.get(self._key(device_id, game_id, kind, slot_label)) == self._hash(data)
 
-    def record(self, hakchi_code: str, kind: str, data: bytes) -> None:
-        self._hashes[self._key(hakchi_code, kind)] = self._hash(data)
+    def record(
+        self, device_id: str, game_id: str, kind: str, data: bytes, slot_label: str | None = None
+    ) -> None:
+        self._hashes[self._key(device_id, game_id, kind, slot_label)] = self._hash(data)
 
     def save(self) -> None:
         with self._path.open("w") as f:
             json.dump(self._hashes, f, indent=2, sort_keys=True)
 
     @staticmethod
-    def _key(hakchi_code: str, kind: str) -> str:
-        return f"{hakchi_code}:{kind}"
+    def _key(device_id: str, game_id: str, kind: str, slot_label: str | None) -> str:
+        key = f"{device_id}:{game_id}:{kind}"
+        return f"{key}:{slot_label}" if slot_label else key
 
     @staticmethod
     def _hash(data: bytes) -> str:

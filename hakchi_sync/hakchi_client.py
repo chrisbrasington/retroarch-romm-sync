@@ -2,42 +2,10 @@ from __future__ import annotations
 
 import posixpath
 import shlex
-from dataclasses import dataclass
 
-import paramiko
-
-_KEY_CLASSES = (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey)
-
-
-class HakchiError(Exception):
-    pass
-
-
-class SaveNotFoundError(HakchiError):
-    pass
-
-
-@dataclass(frozen=True)
-class InstalledGame:
-    code: str
-    name: str
-    exec_line: str
-
-
-@dataclass(frozen=True)
-class SaveState:
-    data: bytes  # still gzip/RZIP-wrapped, as stored on disk
-    screenshot: bytes | None
-
-
-def _load_private_key(path: str) -> paramiko.PKey:
-    last_exc: Exception | None = None
-    for key_class in _KEY_CLASSES:
-        try:
-            return key_class.from_private_key_file(path)
-        except paramiko.SSHException as exc:
-            last_exc = exc
-    raise HakchiError(f"could not load private key {path}: {last_exc}")
+from .config import StateUploadPolicy
+from .device import InstalledGame, SaveState
+from .ssh_transport import DeviceError, SaveNotFoundError, SSHSession
 
 
 def _parse_desktop_fields(content: str) -> dict[str, str]:
@@ -52,10 +20,6 @@ def _parse_desktop_fields(content: str) -> dict[str, str]:
 class HakchiClient:
     """Reads save files and game metadata off a hakchi2-ce SNES Mini over SSH.
 
-    Uses paramiko's Transport directly (not the SFTP client - the device has
-    no sftp-server binary) and runs shell commands over plain session
-    channels instead.
-
     hakchi2-ce's dropbear SSH server accepts unauthenticated ("none") root
     logins on its local link by default - the same fallback a plain
     `ssh root@hakchi` uses when no key matches - so no key_path is required
@@ -69,34 +33,24 @@ class HakchiClient:
 
     def __init__(
         self,
+        device_id: str,
         host: str,
         user: str = "root",
         port: int = 22,
+        auth: str = "none",
         key_path: str | None = None,
+        password: str | None = None,
     ):
-        self._host = host
-        self._user = user
-        self._port = port
-        self._key_path = key_path
-        self._transport: paramiko.Transport | None = None
+        self.id = device_id
+        self._ssh = SSHSession(
+            host=host, user=user, port=port, auth=auth, key_path=key_path, password=password
+        )
 
     def connect(self) -> None:
-        transport = paramiko.Transport((self._host, self._port))
-        try:
-            transport.start_client(timeout=10)
-            if self._key_path:
-                transport.auth_publickey(self._user, _load_private_key(self._key_path))
-            else:
-                transport.auth_none(self._user)
-        except BaseException:
-            transport.close()
-            raise
-        self._transport = transport
+        self._ssh.connect()
 
     def close(self) -> None:
-        if self._transport is not None:
-            self._transport.close()
-            self._transport = None
+        self._ssh.close()
 
     def __enter__(self) -> HakchiClient:
         self.connect()
@@ -105,29 +59,82 @@ class HakchiClient:
     def __exit__(self, *exc_info) -> None:
         self.close()
 
+    # --- DeviceClient interface --------------------------------------------
+
+    def list_installed_games(self) -> list[InstalledGame]:
+        """Every game hakchi2-ce has installed, across every console it
+        emulates, read from each game's own .desktop launcher file.
+        """
+        command = (
+            f"find {self.GAMES_ROOT} -maxdepth 2 -iname '*.desktop' "
+            "-exec sh -c 'echo ---GAME---; cat \"$1\"' _ {} \\;"
+        )
+        out, _, _ = self._ssh.exec(command)
+        text = out.decode(errors="replace")
+
+        games = []
+        for block in text.split("---GAME---")[1:]:
+            fields = _parse_desktop_fields(block)
+            code = fields.get("Code")
+            name = fields.get("Name")
+            if code and name:
+                games.append(InstalledGame(id=code, name=name))
+        return games
+
+    def list_ids_with_save(self) -> set[str]:
+        """hakchi_codes that have an actual battery save on the device."""
+        command = (
+            f"for d in {self.SAVE_ROOT}/*/; do "
+            "[ -f \"$d/cartridge.sram\" ] && basename \"$d\"; done"
+        )
+        out, _, _ = self._ssh.exec(command)
+        return {line.strip() for line in out.decode(errors="replace").splitlines() if line.strip()}
+
+    def list_ids_with_state(self) -> set[str]:
+        """hakchi_codes that have at least one suspend-point state on the
+        device, even if they have no cartridge.sram (e.g. games with no
+        battery save at all, like many original Game Boy carts).
+        """
+        command = (
+            f"for d in {self.SAVE_ROOT}/*/; do "
+            'find "$d" -name savestate 2>/dev/null | grep -q . && basename "$d"; done'
+        )
+        out, _, _ = self._ssh.exec(command)
+        return {line.strip() for line in out.decode(errors="replace").splitlines() if line.strip()}
+
+    def resolve_path_hint(self, game_id: str) -> str | None:
+        return None  # concept doesn't apply - hakchi_code alone locates everything
+
+    def read_save(self, game_id: str, path_hint: str | None) -> bytes:
+        return self.read_cartridge_sram(game_id)
+
+    def read_states(
+        self, game_id: str, path_hint: str | None, policy: StateUploadPolicy
+    ) -> list[SaveState]:
+        if policy is StateUploadPolicy.ALL:
+            return self.read_all_savestates(game_id)
+        latest = self.read_latest_savestate(game_id)
+        return [latest] if latest is not None else []
+
+    # --- hakchi-specific methods (also used directly by push.py) ----------
+
     def read_cartridge_sram(self, hakchi_code: str) -> bytes:
         path = posixpath.join(self.SAVE_ROOT, hakchi_code, "cartridge.sram")
-        return self._read_file(path)
+        return self._ssh.read_file(path)
 
     def read_latest_savestate(self, hakchi_code: str) -> SaveState | None:
         """Returns the most recently written suspend-point state for a game
         (still gzip/RZIP-wrapped as stored on disk) plus its thumbnail
         screenshot if one exists, or None if it has never been suspended.
         """
-        path = self._find_latest_savestate_path(hakchi_code)
-        if path is None:
+        paths = self._find_savestate_paths(hakchi_code)
+        if not paths:
             return None
+        return self._read_savestate_at(paths[-1])
 
-        # path is .../suspendpointN/rollback/savestate - its screenshot is
-        # the sibling .../suspendpointN/state.png.
-        suspendpoint_dir = posixpath.dirname(posixpath.dirname(path))
-        screenshot_path = posixpath.join(suspendpoint_dir, "state.png")
-        try:
-            screenshot = self._read_file(screenshot_path)
-        except SaveNotFoundError:
-            screenshot = None
-
-        return SaveState(data=self._read_file(path), screenshot=screenshot)
+    def read_all_savestates(self, hakchi_code: str) -> list[SaveState]:
+        """Every suspend-point state for a game, oldest to newest."""
+        return [self._read_savestate_at(path) for path in self._find_savestate_paths(hakchi_code)]
 
     def write_cartridge_sram(self, hakchi_code: str, data: bytes) -> None:
         """Overwrites a game's battery save on the device."""
@@ -140,109 +147,42 @@ class HakchiClient:
         `data` must already be gzip/RZIP-wrapped (see state_codec.encode_savestate).
         Returns the suspend-point directory written to.
         """
-        existing = self._find_latest_savestate_path(hakchi_code)
-        if existing is not None:
-            suspendpoint_dir = posixpath.dirname(posixpath.dirname(existing))
+        paths = self._find_savestate_paths(hakchi_code)
+        if paths:
+            suspendpoint_dir = posixpath.dirname(posixpath.dirname(paths[-1]))
         else:
             suspendpoint_dir = posixpath.join(self.SAVE_ROOT, hakchi_code, "suspendpoint1")
 
         rollback_dir = posixpath.join(suspendpoint_dir, "rollback")
-        _, err, exit_status = self._exec(f"mkdir -p -- {shlex.quote(rollback_dir)}")
+        _, err, exit_status = self._ssh.exec(f"mkdir -p -- {shlex.quote(rollback_dir)}")
         if exit_status != 0:
-            raise HakchiError(f"failed to create {rollback_dir}: {err.decode(errors='replace').strip()}")
+            raise DeviceError(f"failed to create {rollback_dir}: {err.decode(errors='replace').strip()}")
 
         self.write_file(posixpath.join(rollback_dir, "savestate"), data)
         return suspendpoint_dir
 
     def write_file(self, remote_path: str, data: bytes) -> None:
-        if self._transport is None:
-            raise HakchiError("not connected - call connect() first")
+        self._ssh.write_file(remote_path, data)
 
-        channel = self._transport.open_session(timeout=30)
+    def _read_savestate_at(self, path: str) -> SaveState:
+        # path is .../suspendpointN/rollback/savestate - its screenshot is
+        # the sibling .../suspendpointN/state.png.
+        suspendpoint_dir = posixpath.dirname(posixpath.dirname(path))
+        slot_label = posixpath.basename(suspendpoint_dir)
+        screenshot_path = posixpath.join(suspendpoint_dir, "state.png")
         try:
-            channel.exec_command(f"cat > {shlex.quote(remote_path)}")
-            channel.sendall(data)
-            channel.shutdown_write()
-            err = channel.makefile_stderr("rb").read()
-            exit_status = channel.recv_exit_status()
-        finally:
-            channel.close()
+            screenshot = self._ssh.read_file(screenshot_path)
+        except SaveNotFoundError:
+            screenshot = None
+        return SaveState(data=self._ssh.read_file(path), screenshot=screenshot, slot_label=slot_label)
 
-        if exit_status != 0:
-            raise HakchiError(f"failed to write {remote_path}: {err.decode(errors='replace').strip()}")
-
-    def _find_latest_savestate_path(self, hakchi_code: str) -> str | None:
+    def _find_savestate_paths(self, hakchi_code: str) -> list[str]:
+        """Every suspend-point `savestate` file for a game, oldest to newest."""
         game_dir = posixpath.join(self.SAVE_ROOT, hakchi_code)
         command = (
             f"find {shlex.quote(game_dir)} -name savestate 2>/dev/null "
             "| while read -r f; do stat -c '%Y %n' \"$f\"; done "
-            "| sort -n | tail -1 | cut -d' ' -f2-"
+            "| sort -n | cut -d' ' -f2-"
         )
-        out, _, _ = self._exec(command)
-        path = out.decode(errors="replace").strip()
-        return path or None
-
-    def list_installed_games(self) -> list[InstalledGame]:
-        """Every game hakchi2-ce has installed, across every console it
-        emulates, read from each game's own .desktop launcher file.
-        """
-        command = (
-            f"find {self.GAMES_ROOT} -maxdepth 2 -iname '*.desktop' "
-            "-exec sh -c 'echo ---GAME---; cat \"$1\"' _ {} \\;"
-        )
-        out, _, _ = self._exec(command)
-        text = out.decode(errors="replace")
-
-        games = []
-        for block in text.split("---GAME---")[1:]:
-            fields = _parse_desktop_fields(block)
-            code = fields.get("Code")
-            name = fields.get("Name")
-            if code and name:
-                games.append(InstalledGame(code=code, name=name, exec_line=fields.get("Exec", "")))
-        return games
-
-    def list_codes_with_cartridge_sram(self) -> set[str]:
-        """hakchi_codes that have an actual battery save on the device."""
-        command = (
-            f"for d in {self.SAVE_ROOT}/*/; do "
-            "[ -f \"$d/cartridge.sram\" ] && basename \"$d\"; done"
-        )
-        out, _, _ = self._exec(command)
-        return {line.strip() for line in out.decode(errors="replace").splitlines() if line.strip()}
-
-    def list_codes_with_savestate(self) -> set[str]:
-        """hakchi_codes that have at least one suspend-point state on the
-        device, even if they have no cartridge.sram (e.g. games with no
-        battery save at all, like many original Game Boy carts).
-        """
-        command = (
-            f"for d in {self.SAVE_ROOT}/*/; do "
-            'find "$d" -name savestate 2>/dev/null | grep -q . && basename "$d"; done'
-        )
-        out, _, _ = self._exec(command)
-        return {line.strip() for line in out.decode(errors="replace").splitlines() if line.strip()}
-
-    def _read_file(self, remote_path: str) -> bytes:
-        out, err, exit_status = self._exec(f"cat -- {shlex.quote(remote_path)}")
-        if exit_status != 0:
-            message = err.decode(errors="replace").strip()
-            if "No such file" in message:
-                raise SaveNotFoundError(f"{remote_path}: {message}")
-            raise HakchiError(f"failed to read {remote_path}: {message}")
-        return out
-
-    def _exec(self, command: str) -> tuple[bytes, bytes, int]:
-        if self._transport is None:
-            raise HakchiError("not connected - call connect() first")
-
-        channel = self._transport.open_session(timeout=10)
-        try:
-            channel.exec_command(command)
-            out = channel.makefile("rb").read()
-            err = channel.makefile_stderr("rb").read()
-            exit_status = channel.recv_exit_status()
-        finally:
-            channel.close()
-
-        return out, err, exit_status
+        out, _, _ = self._ssh.exec(command)
+        return [line for line in out.decode(errors="replace").splitlines() if line.strip()]

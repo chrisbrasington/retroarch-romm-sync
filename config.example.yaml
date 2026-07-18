@@ -1,38 +1,109 @@
 # Copy this to config.yaml and fill in your own values. This file holds no
-# secrets - the RomM API token lives in .env (see .env.example) instead.
+# secrets - the RomM API token and any device SSH passwords live in .env
+# (see .env.example) instead.
 
 romm:
   base_url: https://romm.example.com
 
-hakchi:
-  host: hakchi
-  user: root
-  port: 22
-  # hakchi2-ce's dropbear SSH server accepts unauthenticated root logins on
-  # its local link by default, so no key is needed - this is the same thing
-  # a plain `ssh root@hakchi` falls back to when no key matches. Only set
-  # key_path if you've hardened the device with real key-based auth.
-  key_path:
+# One entry per handheld to sync. Every device shares the same overall
+# shape (id/type/host/auth/state_upload_policy/games/...), but two fields
+# are worth understanding up front:
+#
+# - state_upload_policy: "all" uploads every save state on the device,
+#   "latest" uploads only the most recently written one. hakchi2-ce devices
+#   default to "all" (there aren't many suspend points to worry about);
+#   stock-RetroArch devices default to "latest", since RetroArch's numbered
+#   save-state slots (and OnionOS's up-to-10 incremental slots) would
+#   otherwise flood RomM with state uploads. Override either way per device.
+# - enabled: false lets you keep a device's config in place (e.g. while
+#   you're still confirming its real host/paths) without it being touched
+#   by a plain `python -m hakchi_sync` run. A device left enabled that's
+#   simply unreachable (e.g. a WiFi handheld that's powered off) is *not*
+#   an error either - it's logged as a warning and skipped, and the run
+#   still succeeds for every other device.
+devices:
+  # --- hakchi2-ce (SNES/NES Mini etc.), over its USB link -----------------
+  - id: snes_mini
+    type: hakchi
+    host: hakchi
+    user: root
+    port: 22
+    # hakchi2-ce's dropbear SSH server accepts unauthenticated root logins on
+    # its local link by default, so no key is needed - this is the same thing
+    # a plain `ssh root@hakchi` falls back to when no key matches. Set
+    # auth: publickey and key_path if you've hardened the device with real
+    # key-based auth.
+    auth: none
+    key_path:
+    state_upload_policy: all
+    # RomM save slot these uploads go into. Keeping automated syncs in their
+    # own slot (separate from saves you upload by hand) is what makes
+    # autocleanup and the "not too many files" retention below safe.
+    slot: auto-sync
+    # How many saves RomM keeps per game in the slot above before deleting
+    # the oldest. RomM also skips uploading unchanged saves within a slot,
+    # so this only grows when the save actually changes.
+    autocleanup_limit: 3
+    # One entry per game to sync. game_id is the CLV-* folder name on the
+    # device (find it with `ssh root@hakchi ls /var/lib/clover/profiles/0`);
+    # rom_id is the numeric ID from the game's RomM URL (.../rom/<id>). Run
+    # with --verify-only to confirm each rom_id actually points at the game
+    # you think it does before syncing for real.
+    games:
+      - game_id: CLV-U-NRHVN
+        rom_id: 369
+        display_name: "The Legend of Zelda - A Link to the Past"
+        # emulator is optional metadata RomM stores alongside the save;
+        # omit if you don't care to record it.
+        emulator: snes9x2010
 
-# RomM save slot these uploads go into. Keeping automated syncs in their own
-# slot (separate from saves you upload by hand) is what makes autocleanup and
-# the "not too many files" retention below safe.
-slot: auto-sync
+  # --- Anbernic RG34xx (stock firmware), over WiFi ------------------------
+  # Stock Anbernic firmware doesn't enable SSH out of the box - see the
+  # README's "RG34xx / Miyoo Mini setup" section for how to turn it on and
+  # what to double-check about these paths/credentials before relying on
+  # them (they're sourced from community documentation for the shared H700
+  # chip family, not verified against every model/firmware revision).
+  - id: rg34xx
+    type: retroarch_ssh
+    enabled: false # flip on once host/paths below are confirmed
+    host: 192.168.1.50
+    user: root
+    auth: password
+    # Community default once SSH is enabled on stock Anbernic firmware is
+    # root/root - set the real value in .env as RG34XX_SSH_PASSWORD (or use
+    # `password: ...` here directly if you'd rather not use .env, at the
+    # cost of it being in plaintext in this file).
+    password_env: RG34XX_SSH_PASSWORD
+    # These three roots are the part most likely to need adjusting for your
+    # specific device/SD-card layout - RG34xx has two SD card slots, and
+    # saves/states typically live on the second one, not the first.
+    roms_root: /mnt/mmcsd1/Roms
+    saves_root: /mnt/mmcsd1/saves_RA/Roms
+    states_root: /mnt/mmcsd1/states_RA/Roms
+    state_upload_policy: latest
+    save_extension: srm
+    games: [] # fill in via --setup --device rg34xx
 
-# How many saves RomM keeps per game in the slot above before deleting the
-# oldest. RomM also skips uploading unchanged saves within a slot, so this
-# only grows when the save actually changes.
-autocleanup_limit: 3
-
-# One entry per game to sync. hakchi_code is the CLV-* folder name on the
-# device (find it with `ssh root@hakchi ls /var/lib/clover/profiles/0`);
-# rom_id is the numeric ID from the game's RomM URL (.../rom/<id>).
-# Run with --verify-only to confirm each rom_id actually points at the
-# game you think it does before syncing for real.
-games:
-  - hakchi_code: CLV-U-NRHVN
-    rom_id: 369
-    display_name: "The Legend of Zelda - A Link to the Past"
-    # emulator is optional metadata RomM stores alongside the save; omit
-    # if you don't care to record it.
-    emulator: snes9x2010
+  # --- Miyoo Mini / Miyoo Mini Plus (OnionOS), over WiFi ------------------
+  - id: miyoo_mini
+    type: retroarch_ssh
+    enabled: false # flip on once host/paths below are confirmed
+    host: 192.168.1.60
+    user: onion
+    auth: password
+    # OnionOS's current default is onion/onion (older builds used
+    # root/onionos - if the current default doesn't work, try that). Set
+    # the real value in .env as MIYOO_SSH_PASSWORD. SSH itself is off by
+    # default too - enable it under Apps > Tweaks > Network > SSH on-device.
+    password_env: MIYOO_SSH_PASSWORD
+    roms_root: /mnt/SDCARD/Roms
+    # OnionOS keys saves/states by RetroArch *core* name (e.g. mGBA), not
+    # by console - that subdirectory is discovered automatically per game,
+    # you shouldn't need to name it yourself.
+    saves_root: /mnt/SDCARD/Saves/CurrentProfile/saves
+    states_root: /mnt/SDCARD/Saves/CurrentProfile/states
+    state_upload_policy: latest
+    # OnionOS keeps up to 10 incremental save states per game by default -
+    # only relevant if you ever switch this device to state_upload_policy: all.
+    max_states: 10
+    games: [] # fill in via --setup --device miyoo_mini

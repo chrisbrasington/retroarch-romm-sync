@@ -7,14 +7,17 @@ from pathlib import Path
 
 import paramiko
 
-from .config import AppConfig, ConfigError, load_config
-from .hakchi_client import HakchiClient
+from .config import AppConfig, ConfigError, DeviceConfig, GameEntry, load_config
+from .device import build_device_client
 from .hash_cache import HashCache
 from .romm_client import RomMApiError, RomMClient
 from .setup_wizard import SetupWizard
+from .ssh_transport import DeviceError
 from .sync_service import SaveSyncService, SyncStatus
 
 logger = logging.getLogger("hakchi_sync")
+
+_UNREACHABLE_EXCEPTIONS = (OSError, paramiko.SSHException, DeviceError)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -28,7 +31,7 @@ def _setup_logging(verbose: bool) -> None:
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="hakchi_sync",
-        description="Sync SNES Mini (hakchi2-ce) save files into RomM.",
+        description="Sync save files from your handhelds (hakchi2-ce, stock RetroArch over SSH) into RomM.",
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument(
@@ -50,9 +53,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="with --setup, also offer games that have no save file on the device yet",
     )
     parser.add_argument(
+        "--device",
+        metavar="DEVICE_ID",
+        help="only process this one device (its 'id' in config.yaml, e.g. snes_mini, rg34xx). "
+        "Omit to process every enabled device - unreachable ones (e.g. a powered-off WiFi "
+        "handheld) are logged as a warning and skipped, not a hard failure.",
+    )
+    parser.add_argument(
         "--game",
-        metavar="HAKCHI_CODE",
-        help="only process this one game (e.g. CLV-U-NRHVN), for testing a single mapping",
+        metavar="GAME_ID",
+        help="only process this one game (requires --device, since game ids aren't unique across devices)",
     )
     parser.add_argument(
         "--hash-cache",
@@ -71,47 +81,58 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _select_games(config: AppConfig, only_code: str | None):
-    if only_code is None:
-        return config.games
+def _select_devices(config: AppConfig, only_id: str | None) -> list[DeviceConfig]:
+    if only_id is None:
+        return [d for d in config.devices if d.enabled]
 
-    game = config.find_game(only_code)
+    device = config.find_device(only_id)
+    if device is None:
+        raise ConfigError(f"no device with id {only_id!r} in config")
+    return [device]
+
+
+def _select_games(device: DeviceConfig, only_game_id: str | None) -> list[GameEntry]:
+    if only_game_id is None:
+        return device.games
+
+    game = device.find_game(only_game_id)
     if game is None:
-        raise ConfigError(f"no game with hakchi_code {only_code!r} in config")
+        raise ConfigError(f"no game with game_id {only_game_id!r} on device {device.id!r}")
     return [game]
 
 
-def _verify_mappings(config: AppConfig, games) -> bool:
-    romm = RomMClient(config.romm_base_url, config.romm_api_token)
+def _verify_mappings(romm: RomMClient, device: DeviceConfig, games: list[GameEntry]) -> bool:
     all_ok = True
 
-    print(f"{'HAKCHI CODE':<16} {'ROM ID':>7}  ROMM NAME (PLATFORM)")
+    print(f"\n{device.id}:")
+    print(f"  {'GAME ID':<24} {'ROM ID':>7}  ROMM NAME (PLATFORM)")
     for game in games:
         try:
             rom = romm.get_rom_summary(game.rom_id)
-            print(f"{game.hakchi_code:<16} {game.rom_id:>7}  {rom.name} ({rom.platform_display_name})")
+            print(f"  {game.game_id:<24} {game.rom_id:>7}  {rom.name} ({rom.platform_display_name})")
         except RomMApiError as exc:
             all_ok = False
-            print(f"{game.hakchi_code:<16} {game.rom_id:>7}  ERROR: {exc}")
+            print(f"  {game.game_id:<24} {game.rom_id:>7}  ERROR: {exc}")
 
     return all_ok
 
 
-def _print_summary(results) -> int:
-    counts: dict[tuple[str, SyncStatus], int] = {}
+def _print_summary(results, skipped_devices: list[str]) -> int:
+    counts: dict[tuple[str, str, SyncStatus], int] = {}
     for result in results:
-        key = (result.kind, result.status)
+        key = (result.device_id, result.kind, result.status)
         counts[key] = counts.get(key, 0) + 1
 
     print()
     print("Summary:")
-    for kind in ("sram", "state"):
-        for status in SyncStatus:
-            n = counts.get((kind, status), 0)
-            if n:
-                print(f"  {kind} {status.value}: {n}")
+    for key in sorted(counts, key=lambda k: (k[0], k[1], k[2].value)):
+        device_id, kind, status = key
+        print(f"  [{device_id}] {kind} {status.value}: {counts[key]}")
 
-    any_failed = any(status is SyncStatus.FAILED for _, status in counts)
+    if skipped_devices:
+        print(f"  (unreachable, skipped: {', '.join(skipped_devices)})")
+
+    any_failed = any(status is SyncStatus.FAILED for _, _, status in counts)
     return 1 if any_failed else 0
 
 
@@ -125,29 +146,43 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("config error: %s", exc)
         return 2
 
-    if args.setup:
-        try:
-            with HakchiClient(
-                host=config.hakchi_host,
-                user=config.hakchi_user,
-                port=config.hakchi_port,
-                key_path=config.hakchi_key_path,
-            ) as hakchi:
-                romm = RomMClient(config.romm_base_url, config.romm_api_token)
-                wizard = SetupWizard(hakchi, romm, args.config)
-                return wizard.run(include_all=args.all_roms)
-        except (OSError, paramiko.SSHException) as exc:
-            logger.error("could not reach hakchi at %s: %s", config.hakchi_host, exc)
-            return 3
+    if args.game and not args.device:
+        logger.error("--game requires --device, since game ids aren't unique across devices")
+        return 2
 
     try:
-        games = _select_games(config, args.game)
+        devices = _select_devices(config, args.device)
+    except ConfigError as exc:
+        logger.error("config error: %s", exc)
+        return 2
+
+    if not devices:
+        logger.error("no enabled devices to process")
+        return 2
+
+    romm = RomMClient(config.romm_base_url, config.romm_api_token)
+
+    if args.setup:
+        for device_config in devices:
+            print(f"\n=== {device_config.id} ===")
+            try:
+                with build_device_client(device_config) as device:
+                    wizard = SetupWizard(device, romm, args.config, device_config.id)
+                    wizard.run(include_all=args.all_roms)
+            except _UNREACHABLE_EXCEPTIONS as exc:
+                logger.warning("device %s unreachable, skipping: %s", device_config.id, exc)
+        return 0
+
+    try:
+        games_by_device = {d.id: _select_games(d, args.game) for d in devices}
     except ConfigError as exc:
         logger.error("config error: %s", exc)
         return 2
 
     if args.verify_only:
-        ok = _verify_mappings(config, games)
+        ok = True
+        for device_config in devices:
+            ok = _verify_mappings(romm, device_config, games_by_device[device_config.id]) and ok
         return 0 if ok else 1
 
     hash_cache = None
@@ -155,24 +190,24 @@ def main(argv: list[str] | None = None) -> int:
         cache_path = args.hash_cache or (Path(args.config).parent / ".hakchi_sync_cache.json")
         hash_cache = HashCache(cache_path)
 
-    try:
-        with HakchiClient(
-            host=config.hakchi_host,
-            user=config.hakchi_user,
-            port=config.hakchi_port,
-            key_path=config.hakchi_key_path,
-        ) as hakchi:
-            romm = RomMClient(config.romm_base_url, config.romm_api_token)
-            service = SaveSyncService(hakchi, romm, config, dry_run=args.dry_run, hash_cache=hash_cache)
-            results = service.run(games)
-    except (OSError, paramiko.SSHException) as exc:
-        logger.error("could not reach hakchi at %s: %s", config.hakchi_host, exc)
-        return 3
+    results = []
+    skipped_devices = []
+
+    for device_config in devices:
+        try:
+            with build_device_client(device_config) as device:
+                service = SaveSyncService(
+                    device, romm, device_config, dry_run=args.dry_run, hash_cache=hash_cache
+                )
+                results.extend(service.run(games_by_device[device_config.id]))
+        except _UNREACHABLE_EXCEPTIONS as exc:
+            logger.warning("device %s unreachable, skipping: %s", device_config.id, exc)
+            skipped_devices.append(device_config.id)
 
     if hash_cache and not args.dry_run:
         hash_cache.save()
 
-    return _print_summary(results)
+    return _print_summary(results, skipped_devices)
 
 
 if __name__ == "__main__":

@@ -42,10 +42,7 @@ class RomMClient:
         self._session.headers["Authorization"] = f"Bearer {api_token}"
 
     def get_rom_summary(self, rom_id: int) -> RomSummary:
-        resp = self._session.get(
-            f"{self._base_url}/api/roms/{rom_id}/simple", timeout=self._timeout
-        )
-        self._raise_for_status(resp, f"fetching rom {rom_id}")
+        resp = self._request("get", f"/api/roms/{rom_id}/simple", f"fetching rom {rom_id}")
         return self._rom_summary_from_json(resp.json())
 
     def search_roms(self, search_term: str, limit: int = 5) -> list[RomSummary]:
@@ -56,10 +53,7 @@ class RomMClient:
             "with_filter_values": "false",
             "with_rom_id_index": "false",
         }
-        resp = self._session.get(
-            f"{self._base_url}/api/roms", params=params, timeout=self._timeout
-        )
-        self._raise_for_status(resp, f"searching roms for {search_term!r}")
+        resp = self._request("get", "/api/roms", f"searching roms for {search_term!r}", params=params)
         return [self._rom_summary_from_json(item) for item in resp.json().get("items", [])]
 
     @staticmethod
@@ -91,13 +85,13 @@ class RomMClient:
         if slot:
             params["slot"] = slot
 
-        resp = self._session.post(
-            f"{self._base_url}/api/saves",
+        resp = self._request(
+            "post",
+            "/api/saves",
+            f"uploading save for rom {rom_id}",
             params=params,
             files={"saveFile": (file_name, data)},
-            timeout=self._timeout,
         )
-        self._raise_for_status(resp, f"uploading save for rom {rom_id}")
         body = resp.json()
         return UploadResult(asset_id=body["id"], file_name=body["file_name"])
 
@@ -118,28 +112,16 @@ class RomMClient:
         if screenshot:
             files["screenshotFile"] = (f"{file_name}.png", screenshot)
 
-        resp = self._session.post(
-            f"{self._base_url}/api/states",
-            params=params,
-            files=files,
-            timeout=self._timeout,
-        )
-        self._raise_for_status(resp, f"uploading state for rom {rom_id}")
+        resp = self._request("post", "/api/states", f"uploading state for rom {rom_id}", params=params, files=files)
         body = resp.json()
         return UploadResult(asset_id=body["id"], file_name=body["file_name"])
 
     def list_saves(self, rom_id: int) -> list[AssetSummary]:
-        resp = self._session.get(
-            f"{self._base_url}/api/saves", params={"rom_id": rom_id}, timeout=self._timeout
-        )
-        self._raise_for_status(resp, f"listing saves for rom {rom_id}")
+        resp = self._request("get", "/api/saves", f"listing saves for rom {rom_id}", params={"rom_id": rom_id})
         return [self._asset_summary_from_json(item) for item in resp.json()]
 
     def list_states(self, rom_id: int) -> list[AssetSummary]:
-        resp = self._session.get(
-            f"{self._base_url}/api/states", params={"rom_id": rom_id}, timeout=self._timeout
-        )
-        self._raise_for_status(resp, f"listing states for rom {rom_id}")
+        resp = self._request("get", "/api/states", f"listing states for rom {rom_id}", params={"rom_id": rom_id})
         return [self._asset_summary_from_json(item) for item in resp.json()]
 
     def download_save(self, save_id: int) -> bytes:
@@ -149,8 +131,7 @@ class RomMClient:
         return self._download(f"/api/states/{state_id}/content", f"state {state_id}")
 
     def _download(self, path: str, description: str) -> bytes:
-        resp = self._session.get(f"{self._base_url}{path}", timeout=self._timeout)
-        self._raise_for_status(resp, f"downloading {description}")
+        resp = self._request("get", path, f"downloading {description}")
         return resp.content
 
     @staticmethod
@@ -162,9 +143,12 @@ class RomMClient:
             updated_at=data["updated_at"],
         )
 
-    @staticmethod
-    def _raise_for_status(resp: requests.Response, action: str) -> None:
+    def _request(self, method: str, path: str, action: str, **kwargs) -> requests.Response:
+        try:
+            resp = self._session.request(method, f"{self._base_url}{path}", timeout=self._timeout, **kwargs)
+        except requests.RequestException as exc:
+            raise RomMApiError(f"{action} failed: {exc}") from exc
+
         if resp.status_code >= 400:
-            raise RomMApiError(
-                f"{action} failed: HTTP {resp.status_code} {resp.text[:300]}"
-            )
+            raise RomMApiError(f"{action} failed: HTTP {resp.status_code} {resp.text[:300]}")
+        return resp
