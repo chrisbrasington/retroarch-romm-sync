@@ -45,12 +45,14 @@ class SaveSyncService:
         device_config: DeviceConfig,
         dry_run: bool = False,
         hash_cache: HashCache | None = None,
+        force: bool = False,
     ):
         self._device = device_client
         self._romm = romm_client
         self._config = device_config
         self._dry_run = dry_run
         self._hash_cache = hash_cache
+        self._force = force
 
     def sync_game(self, game: GameEntry) -> list[SyncResult]:
         return [self._sync_sram(game), *self._sync_states(game)]
@@ -68,7 +70,11 @@ class SaveSyncService:
             logger.error("%s: failed to read from device: %s", tag, exc)
             return SyncResult(device_id, game, "sram", SyncStatus.FAILED, str(exc))
 
-        if self._hash_cache and self._hash_cache.unchanged(device_id, game.game_id, "sram", data):
+        if (
+            not self._force
+            and self._hash_cache
+            and self._hash_cache.unchanged(device_id, game.game_id, "sram", data)
+        ):
             logger.info("%s: unchanged since last sync, skipping", tag)
             return SyncResult(device_id, game, "sram", SyncStatus.UNCHANGED)
 
@@ -130,7 +136,7 @@ class SaveSyncService:
             logger.error("%s [%s]: could not decode state: %s", tag, state.slot_label, exc)
             return SyncResult(device_id, game, "state", SyncStatus.FAILED, str(exc))
 
-        if self._hash_cache and self._hash_cache.unchanged(
+        if not self._force and self._hash_cache and self._hash_cache.unchanged(
             device_id, game.game_id, "state", data, state.slot_label
         ):
             logger.info("%s [%s]: unchanged since last sync, skipping", tag, state.slot_label)

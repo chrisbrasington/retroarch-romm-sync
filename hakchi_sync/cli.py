@@ -38,6 +38,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--dry-run", action="store_true", help="log what would be uploaded without uploading"
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="upload even if the hash cache says this save/state is unchanged since last "
+        "sync (e.g. to re-push after deleting the asset in RomM, or to replace it)",
+    )
+    parser.add_argument(
         "--verify-only",
         action="store_true",
         help="check that each configured rom_id resolves to the expected game in RomM, then exit",
@@ -218,7 +224,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with build_device_client(device_config) as device:
                 service = SaveSyncService(
-                    device, romm, device_config, dry_run=args.dry_run, hash_cache=hash_cache
+                    device,
+                    romm,
+                    device_config,
+                    dry_run=args.dry_run,
+                    hash_cache=hash_cache,
+                    force=args.force,
                 )
                 results.extend(service.run(games_by_device[device_config.id]))
         except _UNREACHABLE_EXCEPTIONS as exc:

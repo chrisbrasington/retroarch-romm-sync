@@ -147,8 +147,16 @@ class RetroArchSSHClient:
 
     def _find_state_paths(self, state_dir: str, game_id: str) -> list[str]:
         pattern = self._state_glob.format(basename=game_id)
+        # RetroArch (confirmed live on OnionOS) writes each state's thumbnail
+        # as a sibling "<state filename>.png" - e.g. "Foo.state.auto" plus
+        # "Foo.state.auto.png". Both match a naive "{basename}.state*" glob,
+        # and the .png is written a moment after the state itself, so
+        # without excluding it, "latest" picks the thumbnail instead of the
+        # actual state. Thumbnails are still found separately, per real
+        # state file, in _read_state_at().
         command = (
-            f"find {shlex.quote(state_dir)} -maxdepth 1 -type f -iname {shlex.quote(pattern)} 2>/dev/null "
+            f"find {shlex.quote(state_dir)} -maxdepth 1 -type f -iname {shlex.quote(pattern)} "
+            "! -iname '*.png' 2>/dev/null "
             "| while read -r f; do stat -c '%Y %n' \"$f\"; done "
             "| sort -n | cut -d' ' -f2-"
         )
