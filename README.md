@@ -1,18 +1,28 @@
 # hakchi-sync
 
-Pulls save data off your handhelds over SSH and uploads it to
-[RomM](https://docs.romm.app/), so it's backed up and playable from RomM's
-browser emulator. Supports:
+A RetroArch-to-[RomM](https://docs.romm.app/) save/state sync tool. Pulls
+save data off your handhelds over SSH and uploads it to RomM, so it's
+backed up and playable from RomM's browser emulator - every supported
+device runs a RetroArch core under the hood, hakchi2-ce included, so one
+tool covers all of them.
+
+**Tested on:**
+- **SNES Mini** (hakchi2-ce) - via USB/SSH
+- **Miyoo Mini Plus** (OnionOS) - via WiFi/SSH
+- **Anbernic RG34xx** (stock firmware) - via WiFi/SSH
+
+Supports:
 
 - A **hakchi2-ce modded SNES/NES Mini**, over its always-on USB link. Works
   across every console hakchi2-ce runs (SNES, NES, Game Boy, etc.) - the
   save-directory convention is the same regardless of which core actually
   emulates the game.
 - **Stock-RetroArch handhelds over WiFi** - an Anbernic RG34xx (stock
-  firmware) and a Miyoo Mini (OnionOS) out of the box, and any similar
-  stock-RetroArch device via config. Unlike the SNES Mini's always-plugged-in
-  USB link, these are typically WiFi-only and often powered off - a sync run
-  treats an unreachable device as a warning and skips it, not a failure.
+  firmware) and a Miyoo Mini/Miyoo Mini Plus (OnionOS) out of the box, and
+  any similar stock-RetroArch device via config. Unlike the SNES Mini's
+  always-plugged-in USB link, these are typically WiFi-only and often
+  powered off - a sync run treats an unreachable device as a warning and
+  skips it, not a failure.
 
 Every device is configured under one `devices:` list in config.yaml (see
 `config.example.yaml`) and can be synced together in one run, or targeted
@@ -71,9 +81,10 @@ device's IP before configuring it here:
   commonly documented default password. **This isn't verified against every
   RG34xx firmware revision** - if it doesn't work, you'll need to find the
   current method for your specific build.
-- **Miyoo Mini (OnionOS)**: enable it on-device under *Apps > Tweaks >
-  Network > SSH*. Current OnionOS defaults to `onion`/`onion`; older builds
-  used `root`/`onionos` - try both if the first doesn't work.
+- **Miyoo Mini / Miyoo Mini Plus (OnionOS)**: enable it on-device under
+  *Apps > Tweaks > Network > SSH*. Current OnionOS defaults to
+  `onion`/`onion`; older builds used `root`/`onionos` - try both if the
+  first doesn't work.
 
 Either way, once you can `ssh <user>@<device-ip>` manually, note the IP and
 put the password in `.env` (see `.env.example`) rather than config.yaml.
