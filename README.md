@@ -1,5 +1,8 @@
 # retroarch to ROMM manager sync
 
+TODO: I really need to rename the main program from `hakchi_sync` since it 
+went to generic retroarch device support..
+
 This started as a simple itch: I wanted my SNES Mini's save files backed up
 somewhere safer than the console itself. It's grown into a small tool that
 backs up saves and states from a few handhelds into
