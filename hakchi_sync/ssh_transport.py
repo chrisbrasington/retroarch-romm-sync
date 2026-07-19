@@ -92,12 +92,21 @@ class SSHSession:
         self.close()
 
     def read_file(self, remote_path: str) -> bytes:
-        out, err, exit_status = self.exec(f"cat -- {shlex.quote(remote_path)}")
+        # Distinguish "file doesn't exist" (fine - callers like the
+        # optional screenshot lookup tolerate this) from a real read
+        # failure via a POSIX `[ -e ]` check and a dedicated exit-code
+        # sentinel, rather than matching cat's stderr text. That text is
+        # locale-dependent - confirmed live: an RG34xx unit reports
+        # "没有那个文件或目录" instead of "No such file or directory",
+        # which silently turned a missing (optional) screenshot into a
+        # hard failure that killed the whole state upload.
+        quoted = shlex.quote(remote_path)
+        command = f"if [ -e {quoted} ]; then cat -- {quoted}; else exit 111; fi"
+        out, err, exit_status = self.exec(command)
+        if exit_status == 111:
+            raise SaveNotFoundError(f"{remote_path}: no such file")
         if exit_status != 0:
-            message = err.decode(errors="replace").strip()
-            if "No such file" in message:
-                raise SaveNotFoundError(f"{remote_path}: {message}")
-            raise DeviceError(f"failed to read {remote_path}: {message}")
+            raise DeviceError(f"failed to read {remote_path}: {err.decode(errors='replace').strip()}")
         return out
 
     def write_file(self, remote_path: str, data: bytes) -> None:

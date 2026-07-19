@@ -79,7 +79,7 @@ class RetroArchSSHClient:
             if not line:
                 continue
             stem = posixpath.splitext(posixpath.basename(line))[0]
-            games.setdefault(stem, InstalledGame(id=stem, name=stem))
+            games.setdefault(stem, InstalledGame(id=stem, name=stem, full_path=line))
         return list(games.values())
 
     def list_ids_with_save(self) -> set[str]:

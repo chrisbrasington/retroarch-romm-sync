@@ -18,6 +18,11 @@ __all__ = [
 class InstalledGame:
     id: str
     name: str
+    # Full on-device path to the ROM file, when the device exposes one (only
+    # meaningful for stock-RetroArch devices - hakchi2-ce's games aren't
+    # loose ROM files you'd copy off by hand). Shown during --setup so an
+    # unmatched game can be located/copied manually.
+    full_path: str | None = None
 
 
 @dataclass(frozen=True)

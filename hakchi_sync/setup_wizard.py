@@ -117,6 +117,8 @@ class SetupWizard:
         else:
             note = "  [no save or state on device]"
         print(f"\n{game.name}  ({game.id}){note}")
+        if game.full_path:
+            print(f"  file: {game.full_path}")
 
         search_term = game.name
         while True:
