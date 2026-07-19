@@ -56,13 +56,27 @@ class SaveSyncService:
         self._force = force
 
     def sync_game(self, game: GameEntry) -> list[SyncResult]:
+        return self.sync_kind(game, "both")
+
+    def sync_kind(self, game: GameEntry, kind: str) -> list[SyncResult]:
+        """Pull just one artifact kind for a game ("sram", "state", or
+        "both"). Lets a caller that only wants one thing (e.g.
+        hakchi_sync.interactive's rom-centric "pull save only" action) get
+        it without a whole-game sync_game() call doing more than asked.
+        """
         if game.ignored:
             device_id = self._device.id
             logger.info(
                 "[%s/%s] %s: ignored in config, skipping", device_id, game.game_id, game.label
             )
             return [SyncResult(device_id, game, "game", SyncStatus.IGNORED)]
-        return [self._sync_sram(game), *self._sync_states(game)]
+
+        results: list[SyncResult] = []
+        if kind in ("sram", "both"):
+            results.append(self._sync_sram(game))
+        if kind in ("state", "both"):
+            results.extend(self._sync_states(game))
+        return results
 
     def _sync_sram(self, game: GameEntry) -> SyncResult:
         device_id = self._device.id
@@ -114,7 +128,9 @@ class SaveSyncService:
         logger.info(
             "%s: uploaded %s (%d bytes) -> asset id %d", tag, result.file_name, len(data), result.asset_id
         )
-        return SyncResult(device_id, game, "sram", SyncStatus.UPLOADED, f"asset id {result.asset_id}")
+        return SyncResult(
+            device_id, game, "sram", SyncStatus.UPLOADED, f"{result.file_name} (asset id {result.asset_id})"
+        )
 
     def _sync_states(self, game: GameEntry) -> list[SyncResult]:
         device_id = self._device.id
@@ -177,7 +193,9 @@ class SaveSyncService:
             "%s [%s]: uploaded %s (%d bytes) -> asset id %d",
             tag, state.slot_label, result.file_name, len(data), result.asset_id,
         )
-        return SyncResult(device_id, game, "state", SyncStatus.UPLOADED, f"asset id {result.asset_id}")
+        return SyncResult(
+            device_id, game, "state", SyncStatus.UPLOADED, f"{result.file_name} (asset id {result.asset_id})"
+        )
 
     def run(self, games: list[GameEntry] | None = None) -> list[SyncResult]:
         results = []

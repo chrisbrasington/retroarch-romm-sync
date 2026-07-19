@@ -1,48 +1,60 @@
 # retroarch to ROMM manager sync
 
-A RetroArch-to-[RomM](https://docs.romm.app/) save/state sync tool. Pulls
-save data off your handhelds over SSH and uploads it to RomM, so it's
+A RetroArch-to-[RomM](https://docs.romm.app/) save/state **backup** tool.
+Pulls save data off your handhelds over SSH and uploads it to RomM, so it's
 backed up and playable from RomM's browser emulator - every supported
 device runs a RetroArch core under the hood, hakchi2-ce included, so one
 tool covers all of them.
+
+**This is backup/recovery, not Syncthing.** It doesn't keep saves
+continuously identical across devices, and there's no "save on device A
+instantly appears on device B" behavior - nothing runs in the background
+watching for changes. If you want to pick up where you left off on a
+*different* device, that's a manual, one-directional move each time: make
+sure RomM has your latest save (pull it from whichever device you were
+just playing on), then push that save down onto the device you want to
+play on next. You decide when progress moves, and to where.
 
 **Tested on:**
 - **SNES Mini** (hakchi2-ce) - via USB/SSH
 - **Miyoo Mini Plus** (OnionOS) - via WiFi/SSH
 - **Anbernic RG34xx** (stock firmware) - via WiFi/SSH
 
-Supports:
-
-- A **hakchi2-ce modded SNES/NES Mini**, over its always-on USB link. Works
-  across every console hakchi2-ce runs (SNES, NES, Game Boy, etc.) - the
-  save-directory convention is the same regardless of which core actually
-  emulates the game.
-- **Stock-RetroArch handhelds over WiFi** - an Anbernic RG34xx (stock
-  firmware) and a Miyoo Mini/Miyoo Mini Plus (OnionOS) out of the box, and
-  any similar stock-RetroArch device via config. Unlike the SNES Mini's
-  always-plugged-in USB link, these are typically WiFi-only and often
-  powered off - a sync run treats an unreachable device as a warning and
-  skips it, not a failure.
-
 ![](.img/ages.png)
 
 Every device is configured under one `devices:` list in config.yaml (see
-`config.example.yaml`) and can be synced together in one run, or targeted
-individually with `--device`.
+`config.example.yaml`) and can be backed up together in one run, or
+targeted individually with `--device`. The SNES Mini is USB-only and
+assumed always plugged in when you run a backup; the RG34xx and Miyoo Mini
+are WiFi and often powered off - an unreachable device is logged as a
+warning and skipped, not a failure.
 
-Each configured game syncs two things independently:
+Each mapped game backs up two things independently:
 - **The battery/cartridge save** - the actual in-game save. This is the
-  reliable part; it's core-agnostic and plays back in RomM/EmulatorJS fine
-  (confirmed against a real device).
-- **Save state(s)** - uploaded too, but may not load in EmulatorJS if the
-  device's emulator core doesn't match RomM's (confirmed: hakchi's SNES core
-  is `snes9x2010`, RomM/EmulatorJS only offer `snes9x`/`bsnes` - different
-  internal state formats). Uploaded anyway because some games (e.g. original
-  Game Boy carts with no battery save at all) have nothing else to back up,
-  and RomM's core might happen to match. Whether *all* states or just the
-  *latest* one gets uploaded is a per-device setting - see
-  `state_upload_policy` below. A game with neither a save nor a state is
-  skipped, not an error.
+  reliable part; it's core-agnostic and plays back in RomM/EmulatorJS fine.
+- **Save state(s)** - backed up too, but may not load in EmulatorJS if the
+  device's emulator core doesn't match RomM's (confirmed: hakchi's SNES
+  core is `snes9x2010`, RomM/EmulatorJS only offer `snes9x`/`bsnes` -
+  different internal state formats). Backed up anyway since some games
+  (e.g. original Game Boy carts with no battery save at all) have nothing
+  else to back up. Whether *all* states or just the *latest* one gets
+  backed up is a per-device setting - see `state_upload_policy` under
+  Retention. A game with neither a save nor a state is skipped, not an
+  error.
+
+## Three ways to run it
+
+- **`python -m hakchi_sync`** - the main backup command. Pulls every mapped
+  game on every enabled device into RomM, unattended - what you'd run on a
+  schedule (cron, the Docker Compose loop). Never writes anything back to
+  a device.
+- **`python -m hakchi_sync.push`** - the recovery/transfer command. Pushes
+  a save or state from RomM down onto one device, one game at a time -
+  e.g. to restore an older save, or move progress onto a different device.
+- **`python -m hakchi_sync.interactive`** - both directions above, but
+  picked from a list instead of `--device`/`--rom`/`--game` flags. Useful
+  when you know the game but not its exact IDs, or want to pull from one
+  device and push to another in the same sitting.
 
 ## Prerequisites
 
@@ -60,7 +72,7 @@ any of that setup itself. Before any of the below will work:
    SSH (dropbear) listening as `root`, no password required, over that
    USB link - independent of whether the hakchi2-ce GUI/tool itself is
    running. Unplugging the console removes that network interface, so it
-   has to be plugged in every time you run a sync.
+   has to be plugged in every time you run a backup.
 3. `ssh root@hakchi` (or whatever hostname/IP you use) works on its own,
    with no extra flags. If `hakchi` doesn't resolve, the console's USB
    interface usually shows up as a link-local address (`169.254.x.x`) -
@@ -119,7 +131,7 @@ host machine's browser).
 3. `cp config.example.yaml config.yaml` and fill in `romm.base_url` plus
    each device's `host` (and for RG34xx/Miyoo Mini, the `saves_root`/
    `states_root`/`roms_root` paths and `password_env`). Set `enabled: false`
-   on any device you're not ready to sync yet - it'll be skipped entirely
+   on any device you're not ready to use yet - it'll be skipped entirely
    rather than needing placeholder credentials. Leave each device's `games:`
    empty; the next step fills it in.
 4. Add game mappings interactively, one device at a time:
@@ -146,11 +158,11 @@ host machine's browser).
    (`93`) directly - that gets looked up and shown for confirmation before
    it's saved. Blank skips a game for now (it'll be offered again next
    `--setup` run); `i` marks it **ignored** instead - for a game that exists
-   on the device but you don't actually play there (e.g. it's synced from
-   another device already), so it's never offered or synced again, and a
-   sync run just logs that it's skipping it. `q` stops the whole wizard. Add
-   `--all-roms` to also be offered games with no save file yet (e.g. to
-   pre-map something you haven't played yet).
+   on the device but you don't actually play there (e.g. it's backed up
+   from another device already), so it's never offered or backed up again,
+   and a backup run just logs that it's skipping it. `q` stops the whole
+   wizard. Add `--all-roms` to also be offered games with no save file yet
+   (e.g. to pre-map something you haven't played yet).
 
    Games already mapped (or ignored) for that device are skipped, so it's
    safe to re-run `--setup` later as you add more games.
@@ -181,24 +193,77 @@ across devices) to limit it to one game within that device, while testing.
 
 ## Pushing a save/state back to a device
 
-The sync direction above is one-way (device -> RomM). To go the other way -
-push whatever's in RomM back down to a device, e.g. to restore an older
-save or move progress between devices - use the interactive push tool
-instead (currently hakchi2-ce devices only):
+`python -m hakchi_sync` only ever backs up (device -> RomM). To go the
+other way - push whatever's in RomM back down to a device, e.g. to restore
+an older save or move progress onto a different device - use:
 
 ```
-python -m hakchi_sync.push
+python -m hakchi_sync.push --device miyoo_mini
 ```
 
-It lists your mapped games for the first (or `--device <id>`-selected)
-hakchi device, and for whichever one you pick, lets you push its save, its
-state, or both. Each one shows you exactly what it's about to overwrite
-(RomM's filename and timestamp) and requires a `y` confirmation before
-touching the device - **this permanently overwrites whatever's currently on
-the device for that game**, so make sure you're pushing the right thing.
-Picks the most recently updated save/state in RomM if there's more than
-one. Loops back to the game list after each push so you can do several in
-one session; blank/`q` at the game picker exits.
+`--device` is required whenever more than one device is configured. It
+lists that device's mapped games, and for whichever one you pick, lets you
+push its save, its state, or both. Each one shows you exactly what it's
+about to overwrite (RomM's filename and timestamp) and requires a `y`
+confirmation before touching the device - **this permanently overwrites
+whatever's currently on the device for that game**, so make sure you're
+pushing the right thing. Picks the most recently updated save/state in
+RomM if there's more than one. Loops back to the game list after each push
+so you can do several in one session; blank/`q` at the game picker exits.
+Add `--rom 468` to skip straight to one game by its RomM rom_id instead of
+picking it from the list (still asks save/state/both and confirms before
+touching the device).
+
+## Interactive mode: pull or push one game, without flags
+
+```
+python -m hakchi_sync.interactive
+```
+
+It shows every mapped rom across every device, deduplicated - so a game
+mapped on more than one device (e.g. backed up from both the SNES Mini and
+the Miyoo Mini) shows up once, tagged with which devices have it. Pick
+one, then pick a direction and go - this real session pulls a save off the
+Miyoo Mini into RomM:
+
+```
+Mapped roms:
+  67)   369  The Legend of Zelda - A Link to the Past  [snes_mini, miyoo_mini]
+
+Pick a rom, or 'q' to quit: 67
+
+The Legend of Zelda - A Link to the Past (rom 369)
+  mapped on: snes_mini, miyoo_mini
+  1) pull (device -> RomM)   2) push (RomM -> device)   'b' back   'q' quit: 1
+  Pull from which device?
+    1) snes_mini
+    2) miyoo_mini
+  pick a number, or 'b' to go back: 2
+  Pull (s)ave, s(t)ate, (b)oth, or blank to cancel: s
+  [sram] uploaded: Legend of Zelda Link to the Past [2026-07-19_17-23-51].srm (asset id 91)
+    https://retro.home.chrisincode.com/rom/369?tab=save-data&subtab=saves
+```
+
+Every uploaded save/state prints its RomM filename plus a direct link to
+it in RomM's web UI, so you can jump straight there to double check it (or
+grab the file yourself). If the content you just pulled happens to be
+byte-identical to what's already stored, RomM's own dedup skips creating a
+duplicate and you'll see the *existing* asset's (older) filename/timestamp
+reflected back instead - that's RomM correctly recognizing nothing
+changed, not a failure.
+
+Staying on the same rom, you can immediately do the reverse onto a
+different device - `1) pull  2) push` again, pick a device, pick
+save/state/both - the same confirm-before-overwrite behavior as
+`push.py`. This is exactly how you'd move progress between two devices:
+pull from the one you were playing on, then push to the one you want to
+play on next. `b` goes back to the rom list without leaving the program;
+`q` at either prompt exits.
+
+This is the same underlying pull (`SaveSyncService`) and push
+(`PushService`) logic the main backup command and `push.py` already use -
+this mode only adds the rom-first picker UX around them, so behavior
+(retention, confirmation, error handling) is identical either way.
 
 ## Retention
 
@@ -223,9 +288,15 @@ so an unchanged save or state is skipped instead of re-uploaded every run.
 Disable it with `--no-hash-cache`, or point it elsewhere with `--hash-cache
 <path>`.
 
+If two devices map the same rom_id and share the same `slot`, RomM's
+per-slot dedup treats their saves as one shared history - fine as long as
+you only ever play the game on one device at a time and keep RomM current
+in between, but give each device its own `slot` (e.g. `auto-sync-miyoo`)
+if you want their save histories kept fully separate in RomM.
+
 ## Docker
 
-The image itself runs one sync pass and exits - it's not a server, and
+The image itself runs one backup pass and exits - it's not a server, and
 doesn't listen on any port. (Docker packaging is a secondary concern here -
 get a working `python -m hakchi_sync` run going first.)
 
@@ -238,13 +309,14 @@ is self-contained - no host cron needed:
 docker compose up -d
 ```
 
-It syncs every configured device, sleeps `SYNC_INTERVAL_SECONDS` (default
-86400 = nightly), and repeats, restarting automatically via `restart:
-unless-stopped` if it crashes or the host reboots. Note this schedules "N
-seconds after the previous run *finishes*," not an exact wall-clock time -
-fine for "roughly nightly," not for "exactly 3:00am." Adjust the interval in
-`docker-compose.yml`'s `environment:` section, or drop the loop and use the
-one-off form below with real host cron if you need exact timing.
+It backs up every configured device, sleeps `SYNC_INTERVAL_SECONDS`
+(default 86400 = nightly), and repeats, restarting automatically via
+`restart: unless-stopped` if it crashes or the host reboots. Note this
+schedules "N seconds after the previous run *finishes*," not an exact
+wall-clock time - fine for "roughly nightly," not for "exactly 3:00am."
+Adjust the interval in `docker-compose.yml`'s `environment:` section, or
+drop the loop and use the one-off form below with real host cron if you
+need exact timing.
 
 Only mount an SSH key (see the commented-out line in `docker-compose.yml`)
 if some device uses `auth: publickey` in config.yaml - the SNES Mini

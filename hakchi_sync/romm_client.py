@@ -41,6 +41,10 @@ class RomMClient:
         self._session = requests.Session()
         self._session.headers["Authorization"] = f"Bearer {api_token}"
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     def get_rom_summary(self, rom_id: int) -> RomSummary:
         resp = self._request("get", f"/api/roms/{rom_id}/simple", f"fetching rom {rom_id}")
         return self._rom_summary_from_json(resp.json())

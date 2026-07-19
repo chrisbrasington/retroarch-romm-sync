@@ -8,7 +8,8 @@ import paramiko
 
 from .config import AppConfig, ConfigError, DeviceConfig, GameEntry, load_config
 from .device import DeviceClient, build_device_client
-from .romm_client import AssetSummary, RomMApiError, RomMClient
+from .push_service import PushService, PushStatus
+from .romm_client import RomMApiError, RomMClient
 from .ssh_transport import DeviceError
 
 
@@ -84,25 +85,26 @@ def _pick_kind(input_func: Callable[[str], str]) -> str | None:
     return None
 
 
-def _latest(assets: list[AssetSummary]) -> AssetSummary:
-    return max(assets, key=lambda a: a.updated_at)
-
-
-def _push_save(
-    device: DeviceClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]
+def confirm_and_push_save(
+    service: PushService, game: GameEntry, input_func: Callable[[str], str]
 ) -> None:
+    """Show the candidate RomM save, confirm with the user, then push it.
+    Shared by this CLI's own game-picker loop and hakchi_sync.interactive's
+    rom-centric flow - the actual push (PushService.push_save) has no
+    prompts of its own, so this is the one place that confirm/print flow
+    lives.
+    """
     try:
-        saves = romm.list_saves(game.rom_id)
+        asset = service.latest_save(game)
     except RomMApiError as exc:
         print(f"  could not list RomM saves: {exc}")
         return
 
-    if not saves:
+    if asset is None:
         print("  no save in RomM for this rom")
         return
 
-    chosen = _latest(saves)
-    print(f"  RomM save: {chosen.file_name} (slot={chosen.slot}, updated {chosen.updated_at})")
+    print(f"  RomM save: {asset.file_name} (slot={asset.slot}, updated {asset.updated_at})")
 
     confirm = input_func(
         f"  this OVERWRITES the current battery save on the device for {game.label}"
@@ -112,31 +114,28 @@ def _push_save(
         print("  cancelled")
         return
 
-    try:
-        data = romm.download_save(chosen.id)
-        device.write_save(game.game_id, game.path_hint, data)
-    except (RomMApiError, DeviceError) as exc:
-        print(f"  push failed: {exc}")
-        return
-
-    print(f"  wrote {len(data)} bytes to the device's save file")
+    result = service.push_save(game, asset)
+    if result.status is PushStatus.FAILED:
+        print(f"  push failed: {result.detail}")
+    else:
+        print(f"  wrote {result.detail}")
 
 
-def _push_state(
-    device: DeviceClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]
+def confirm_and_push_state(
+    service: PushService, game: GameEntry, input_func: Callable[[str], str]
 ) -> None:
+    """State counterpart to confirm_and_push_save() - see its docstring."""
     try:
-        states = romm.list_states(game.rom_id)
+        asset = service.latest_state(game)
     except RomMApiError as exc:
         print(f"  could not list RomM states: {exc}")
         return
 
-    if not states:
+    if asset is None:
         print("  no state in RomM for this rom")
         return
 
-    chosen = _latest(states)
-    print(f"  RomM state: {chosen.file_name} (updated {chosen.updated_at})")
+    print(f"  RomM state: {asset.file_name} (updated {asset.updated_at})")
 
     confirm = input_func(
         f"  this OVERWRITES the current save state on the device for {game.label}"
@@ -146,14 +145,11 @@ def _push_state(
         print("  cancelled")
         return
 
-    try:
-        data = romm.download_state(chosen.id)
-        path = device.write_state(game.game_id, game.path_hint, data)
-    except (RomMApiError, DeviceError) as exc:
-        print(f"  push failed: {exc}")
-        return
-
-    print(f"  wrote {len(data)} bytes to {path}")
+    result = service.push_state(game, asset)
+    if result.status is PushStatus.FAILED:
+        print(f"  push failed: {result.detail}")
+    else:
+        print(f"  wrote {result.detail}")
 
 
 def _push(device: DeviceClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]) -> None:
@@ -161,10 +157,11 @@ def _push(device: DeviceClient, romm: RomMClient, game: GameEntry, input_func: C
     if kind is None:
         print("  cancelled")
         return
+    service = PushService(device, romm)
     if kind in ("save", "both"):
-        _push_save(device, romm, game, input_func)
+        confirm_and_push_save(service, game, input_func)
     if kind in ("state", "both"):
-        _push_state(device, romm, game, input_func)
+        confirm_and_push_state(service, game, input_func)
 
 
 def _run(
