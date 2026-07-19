@@ -1,4 +1,4 @@
-# hakchi-sync
+# retroarch to ROMM manager sync
 
 A RetroArch-to-[RomM](https://docs.romm.app/) save/state sync tool. Pulls
 save data off your handhelds over SSH and uploads it to RomM, so it's
