@@ -1,19 +1,26 @@
 # retroarch to ROMM manager sync
 
-A RetroArch-to-[RomM](https://docs.romm.app/) save/state **backup** tool.
-Pulls save data off your handhelds over SSH and uploads it to RomM, so it's
-backed up and playable from RomM's browser emulator - every supported
-device runs a RetroArch core under the hood, hakchi2-ce included, so one
-tool covers all of them.
+This started as a simple itch: I wanted my SNES Mini's save files backed up
+somewhere safer than the console itself. It's grown into a small tool that
+backs up saves and states from a few handhelds into
+[RomM](https://docs.romm.app/), so they're safe and playable straight from
+RomM's browser emulator - every supported device happens to run a
+RetroArch core under the hood, hakchi2-ce included, so one tool covers all
+of them.
 
-**This is backup/recovery, not Syncthing.** It doesn't keep saves
-continuously identical across devices, and there's no "save on device A
-instantly appears on device B" behavior - nothing runs in the background
-watching for changes. If you want to pick up where you left off on a
-*different* device, that's a manual, one-directional move each time: make
-sure RomM has your latest save (pull it from whichever device you were
-just playing on), then push that save down onto the device you want to
-play on next. You decide when progress moves, and to where.
+It's primarily a backup tool. With a RomM instance already set up, the
+scripts get you going quickly - `--setup` detects which games on a device
+actually have a save file and offers to map them to RomM, and every run
+after that only pulls what's actually changed.
+
+It also supports the reverse - pushing a save back down from RomM onto a
+handheld, e.g. to keep playing where you left off on a different device.
+That's an intentional, one-off command each time (`push` or `interactive`),
+not something that happens automatically in the background. I use it
+myself to move a save between my SNES Mini and Miyoo Mini: pull, then
+push, whenever I actually want to switch - more like running a manual
+rsync than something like Syncthing that keeps everything continuously in
+sync on its own.
 
 **Tested on:**
 - **SNES Mini** (hakchi2-ce) - via USB/SSH
