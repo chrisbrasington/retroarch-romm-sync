@@ -248,7 +248,7 @@ The Legend of Zelda - A Link to the Past (rom 369)
   pick a number, or 'b' to go back: 2
   Pull (s)ave, s(t)ate, (b)oth, or blank to cancel: s
   [sram] uploaded: Legend of Zelda Link to the Past [2026-07-19_17-23-51].srm (asset id 91)
-    https://retro.home.chrisincode.com/rom/369?tab=save-data&subtab=saves
+    https://retro.home/rom/369?tab=save-data&subtab=saves
 ```
 
 Every uploaded save/state prints its RomM filename plus a direct link to
