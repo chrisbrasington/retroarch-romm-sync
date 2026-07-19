@@ -133,6 +133,22 @@ class RetroArchSSHClient:
             paths = [self._pick_latest_state_path(paths, game_id)]
         return [self._read_state_at(path, game_id) for path in paths]
 
+    def write_save(self, game_id: str, path_hint: str | None, data: bytes) -> None:
+        save_dir = self._resolved_dir(self._saves_root, path_hint)
+        path = posixpath.join(save_dir, f"{game_id}.{self._save_extension}")
+        self._ssh.write_file(path, data)
+
+    def write_state(self, game_id: str, path_hint: str | None, data: bytes) -> str:
+        # Always targets the auto-save slot - the same file read_states()
+        # treats as canonical for policy=latest (_pick_latest_state_path
+        # prefers it outright whenever it exists). Unlike hakchi2-ce, stock
+        # RetroArch state files are raw/unwrapped on disk, so `data` (the
+        # raw state RomM stores) is written as-is, no encode_savestate().
+        state_dir = self._resolved_dir(self._states_root, path_hint)
+        path = posixpath.join(state_dir, f"{game_id}.state.auto")
+        self._ssh.write_file(path, data)
+        return path
+
     def _try_read_state(self, state_dir: str, filename: str, game_id: str) -> SaveState | None:
         try:
             return self._read_state_at(posixpath.join(state_dir, filename), game_id)

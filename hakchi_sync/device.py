@@ -62,6 +62,23 @@ class DeviceClient(Protocol):
         self, game_id: str, path_hint: str | None, policy: StateUploadPolicy
     ) -> list[SaveState]: ...
 
+    def write_save(self, game_id: str, path_hint: str | None, data: bytes) -> None:
+        """Overwrites the game's battery/cartridge save on the device. `data`
+        is the raw save exactly as RomM stores it - no device-specific
+        wrapping is ever applied to saves.
+        """
+        ...
+
+    def write_state(self, game_id: str, path_hint: str | None, data: bytes) -> str:
+        """Overwrites the state read_states() would treat as canonical for
+        this game (e.g. hakchi's current suspend point, or a stock
+        RetroArch device's auto-save slot). `data` is the raw/unwrapped
+        state exactly as RomM stores it - each device applies whatever
+        on-disk wrapping it needs internally. Returns the on-device path
+        written, for a human-readable confirmation message.
+        """
+        ...
+
 
 def build_device_client(device: DeviceConfig) -> DeviceClient:
     if device.type == "hakchi":

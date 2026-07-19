@@ -7,46 +7,53 @@ from typing import Callable
 import paramiko
 
 from .config import AppConfig, ConfigError, DeviceConfig, GameEntry, load_config
-from .hakchi_client import HakchiClient
+from .device import DeviceClient, build_device_client
 from .romm_client import AssetSummary, RomMApiError, RomMClient
 from .ssh_transport import DeviceError
-from .state_codec import encode_savestate
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="hakchi_sync.push",
-        description="Push a save and/or state from RomM down to a hakchi2-ce device for a mapped game.",
+        description="Push a save and/or state from RomM down to a device for a mapped game.",
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument(
         "--device",
+        metavar="DEVICE_ID",
         default=None,
-        help="hakchi device id in config.yaml to push to (default: first device of type 'hakchi')",
+        help="device id in config.yaml to push to (required if more than one device is configured)",
+    )
+    parser.add_argument(
+        "--rom",
+        metavar="ROM_ID",
+        type=int,
+        default=None,
+        help="push straight to the game mapped to this RomM rom_id, skipping the game picker "
+        "(still asks save/state/both and a y/N confirm before touching the device)",
     )
     return parser.parse_args(argv)
 
 
-def _resolve_hakchi_device(config: AppConfig, device_id: str | None) -> DeviceConfig:
-    """push.py only supports hakchi2-ce devices (write-back for the new
-    stock-RetroArch devices isn't built yet), so it needs one specific
-    'hakchi'-type device out of config.yaml's devices list.
-    """
+def _resolve_device(config: AppConfig, device_id: str | None) -> DeviceConfig:
     if device_id is not None:
         device = config.find_device(device_id)
         if device is None:
             raise ConfigError(f"no device with id {device_id!r} in config")
-        if device.type != "hakchi":
-            raise ConfigError(
-                f"device {device_id!r} is type {device.type!r}, not 'hakchi' - "
-                "push only supports hakchi2-ce devices"
-            )
         return device
 
-    device = next((d for d in config.devices if d.type == "hakchi"), None)
-    if device is None:
-        raise ConfigError("no device of type 'hakchi' in config - push only supports hakchi2-ce devices")
-    return device
+    if len(config.devices) == 1:
+        return config.devices[0]
+
+    ids = ", ".join(d.id for d in config.devices)
+    raise ConfigError(f"multiple devices configured - specify one with --device ({ids})")
+
+
+def _resolve_game_by_rom(device: DeviceConfig, rom_id: int) -> GameEntry:
+    game = device.find_game_by_rom_id(rom_id)
+    if game is None:
+        raise ConfigError(f"no game mapped to rom_id {rom_id} on device {device.id!r}")
+    return game
 
 
 def _pick_game(device: DeviceConfig, input_func: Callable[[str], str]) -> GameEntry | None:
@@ -82,7 +89,7 @@ def _latest(assets: list[AssetSummary]) -> AssetSummary:
 
 
 def _push_save(
-    hakchi: HakchiClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]
+    device: DeviceClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]
 ) -> None:
     try:
         saves = romm.list_saves(game.rom_id)
@@ -98,7 +105,7 @@ def _push_save(
     print(f"  RomM save: {chosen.file_name} (slot={chosen.slot}, updated {chosen.updated_at})")
 
     confirm = input_func(
-        f"  this OVERWRITES the current cartridge.sram on the device for {game.label}"
+        f"  this OVERWRITES the current battery save on the device for {game.label}"
         " - continue? [y/N] "
     ).strip().lower()
     if confirm not in ("y", "yes"):
@@ -107,16 +114,16 @@ def _push_save(
 
     try:
         data = romm.download_save(chosen.id)
-        hakchi.write_cartridge_sram(game.game_id, data)
+        device.write_save(game.game_id, game.path_hint, data)
     except (RomMApiError, DeviceError) as exc:
         print(f"  push failed: {exc}")
         return
 
-    print(f"  wrote {len(data)} bytes to cartridge.sram on the device")
+    print(f"  wrote {len(data)} bytes to the device's save file")
 
 
 def _push_state(
-    hakchi: HakchiClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]
+    device: DeviceClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]
 ) -> None:
     try:
         states = romm.list_states(game.rom_id)
@@ -132,7 +139,7 @@ def _push_state(
     print(f"  RomM state: {chosen.file_name} (updated {chosen.updated_at})")
 
     confirm = input_func(
-        f"  this OVERWRITES the current suspend-point state on the device for {game.label}"
+        f"  this OVERWRITES the current save state on the device for {game.label}"
         " - continue? [y/N] "
     ).strip().lower()
     if confirm not in ("y", "yes"):
@@ -140,36 +147,49 @@ def _push_state(
         return
 
     try:
-        raw = romm.download_state(chosen.id)
-        encoded = encode_savestate(raw)
-        suspendpoint_dir = hakchi.write_savestate(game.game_id, encoded)
+        data = romm.download_state(chosen.id)
+        path = device.write_state(game.game_id, game.path_hint, data)
     except (RomMApiError, DeviceError) as exc:
         print(f"  push failed: {exc}")
         return
 
-    print(f"  wrote {len(raw)} bytes ({len(encoded)} bytes compressed) to {suspendpoint_dir}/rollback/savestate")
+    print(f"  wrote {len(data)} bytes to {path}")
+
+
+def _push(device: DeviceClient, romm: RomMClient, game: GameEntry, input_func: Callable[[str], str]) -> None:
+    kind = _pick_kind(input_func)
+    if kind is None:
+        print("  cancelled")
+        return
+    if kind in ("save", "both"):
+        _push_save(device, romm, game, input_func)
+    if kind in ("state", "both"):
+        _push_state(device, romm, game, input_func)
 
 
 def _run(
-    hakchi: HakchiClient, romm: RomMClient, device: DeviceConfig, input_func: Callable[[str], str]
+    device: DeviceClient,
+    romm: RomMClient,
+    device_config: DeviceConfig,
+    input_func: Callable[[str], str],
+    only_game: GameEntry | None,
 ) -> None:
+    if only_game is not None:
+        print()
+        try:
+            _push(device, romm, only_game, input_func)
+        except EOFError:
+            print("\nbye")
+        return
+
     while True:
         print()
         try:
-            game = _pick_game(device, input_func)
+            game = _pick_game(device_config, input_func)
             if game is None:
                 print("bye")
                 return
-
-            kind = _pick_kind(input_func)
-            if kind is None:
-                print("  cancelled")
-                continue
-
-            if kind in ("save", "both"):
-                _push_save(hakchi, romm, game, input_func)
-            if kind in ("state", "both"):
-                _push_state(hakchi, romm, game, input_func)
+            _push(device, romm, game, input_func)
         except EOFError:
             # stdin closed mid-prompt (piped input running out, a dropped
             # terminal, Ctrl-D) - exit the same as picking blank/'q' would,
@@ -183,32 +203,25 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = load_config(args.config)
-        device = _resolve_hakchi_device(config, args.device)
+        device_config = _resolve_device(config, args.device)
+        only_game = _resolve_game_by_rom(device_config, args.rom) if args.rom is not None else None
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
 
-    if not device.games:
+    if not device_config.games:
         print(
-            f"No games mapped for device {device.id!r} yet - run "
-            f"`python -m hakchi_sync --setup --device {device.id}` first."
+            f"No games mapped for device {device_config.id!r} yet - run "
+            f"`python -m hakchi_sync --setup --device {device_config.id}` first."
         )
         return 1
 
     try:
-        with HakchiClient(
-            device_id=device.id,
-            host=device.host,
-            user=device.user,
-            port=device.port,
-            auth=device.auth,
-            key_path=device.key_path,
-            password=device.password,
-        ) as hakchi:
+        with build_device_client(device_config) as device:
             romm = RomMClient(config.romm_base_url, config.romm_api_token)
-            _run(hakchi, romm, device, input)
-    except (OSError, paramiko.SSHException) as exc:
-        print(f"could not reach {device.id} at {device.host}: {exc}", file=sys.stderr)
+            _run(device, romm, device_config, input, only_game)
+    except (OSError, paramiko.SSHException, DeviceError) as exc:
+        print(f"could not reach {device_config.id} at {device_config.host}: {exc}", file=sys.stderr)
         return 3
 
     return 0

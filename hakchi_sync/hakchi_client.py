@@ -6,6 +6,7 @@ import shlex
 from .config import StateUploadPolicy
 from .device import InstalledGame, SaveState
 from .ssh_transport import DeviceError, SaveNotFoundError, SSHSession
+from .state_codec import encode_savestate
 
 
 def _parse_desktop_fields(content: str) -> dict[str, str]:
@@ -115,6 +116,16 @@ class HakchiClient:
             return self.read_all_savestates(game_id)
         latest = self.read_latest_savestate(game_id)
         return [latest] if latest is not None else []
+
+    def write_save(self, game_id: str, path_hint: str | None, data: bytes) -> None:
+        self.write_cartridge_sram(game_id, data)
+
+    def write_state(self, game_id: str, path_hint: str | None, data: bytes) -> str:
+        # Clover stores suspend points wrapped in gzip(RZIP(...)) on disk -
+        # `data` here is the raw/unwrapped state (what RomM stores), so it
+        # needs re-wrapping before it matches what hakchi2-ce expects to find.
+        suspendpoint_dir = self.write_savestate(game_id, encode_savestate(data))
+        return posixpath.join(suspendpoint_dir, "rollback", "savestate")
 
     # --- hakchi-specific methods (also used directly by push.py) ----------
 
