@@ -24,6 +24,8 @@ Supports:
   powered off - a sync run treats an unreachable device as a warning and
   skips it, not a failure.
 
+![](.img/ages.png)
+
 Every device is configured under one `devices:` list in config.yaml (see
 `config.example.yaml`) and can be synced together in one run, or targeted
 individually with `--device`.
